@@ -18,7 +18,7 @@ The goal is to create communication between microservices, using such advantages
 ### To launch a task on master-server / separate process:
 
 ```
-from aethermagic import AetherMagic, aether
+from aethermagic import AetherTask
 
 async def complete(ae, success, output_data):
   print('complete')
@@ -27,7 +27,7 @@ async def status(ae, complete, success, progress, output_data):
   print('status')
 
 input_data = {}
-await aether(None, 'worker', 'collect', on_complete=complete, on_status=status).perform(input_data)
+await AetherTask(None, 'worker', 'collect', on_complete=complete, on_status=status).perform(input_data)
 
 ```
 
@@ -44,7 +44,7 @@ Variables and values:
 
 
 ```
-from aethermagic import AetherMagic, aether
+from aethermagic import AetherTask
 
 
 async def perform(ae, input_data):
@@ -56,7 +56,7 @@ async def perform(ae, input_data):
   await ae.complete(success, output_data)
   
 
-await aether(None, 'worker', 'collect', on_perform=perform).idle()
+await AetherTask(None, 'worker', 'collect', on_perform=perform).idle()
 
 ```
 

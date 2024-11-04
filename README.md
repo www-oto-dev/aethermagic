@@ -76,7 +76,7 @@ import threading
 import asyncio
 from aethermagic import AetherMagic
 
-def startloop_telegram(self, args=[None]) -> None:
+def startloop(self, args=[None]) -> None:
 
   async def starttask() -> None:
 
@@ -88,7 +88,7 @@ def startloop_telegram(self, args=[None]) -> None:
 
   asyncio.run(starttask())
 
-thread = threading.Thread(target=startloop_telegram, args=[None])
+thread = threading.Thread(target=startloop, args=[None])
 thread.start()
 thread.join() # Will wait for thread execution to complete ==> never
 ```

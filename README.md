@@ -1,4 +1,5 @@
-# AetherMagic - Communications between microservices over MQTT
+# AetherMagic 
+# Communications between microservices over MQTT
 
 The goal is to create communication between microservices, using such advantages as:
 

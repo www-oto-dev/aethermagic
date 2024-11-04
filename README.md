@@ -1,10 +1,10 @@
 # AetherMagic - Communications between microservices over MQTT
 
-The goal is to create communication between microservices based on the MKTT protocol, using such advantages as:
+The goal is to create communication between microservices, using such advantages as:
 
 - Scaling (multiple microservices to perform one group of tasks)
 - Distribution of tasks (only one microserver receives a task in a group)
-- Distribution of access rights for specific tasks/roles (setting or execution) and division, if necessary, by projects (by configuring access rights on the server side in the MKTT broker)
+- Distribution of access rights for specific tasks/roles (setting or execution) and division, if necessary, by projects (by configuring access rights on the server side in the MQTT broker)
 
 
 ## Installation

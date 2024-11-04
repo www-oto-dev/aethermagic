@@ -1,21 +1,17 @@
 
 import threading
-from asyncio import Queue
-import asyncio
-from asgiref.sync import async_to_sync, sync_to_async
+from uuid import uuid1
+import json
+import certifi
+import socket
 from functools import wraps
 
-from uuid import uuid1
-
-import json
-
-from django.conf import settings
-
-import certifi
+import asyncio
+from asyncio import Queue
+from asgiref.sync import async_to_sync, sync_to_async
 import paho.mqtt.client as mqtt
 import aiomqtt
 
-import socket
 
 
 

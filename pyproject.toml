@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aethermagic"
+version = "0.0.1"
+authors = [
+  { name="Michael Galizki", email="michael@galizki.com" },
+]
+description = "AetherMagic - Communications between microservices over MQTT"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dynamic = ["dependencies"]
+
+[project.urls]
+Homepage = "https://github.com/www-oto-dev/aether-magic"
+Issues = "https://github.com/www-oto-dev/aether/issues"
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}

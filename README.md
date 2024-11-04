@@ -81,7 +81,6 @@ def startloop_telegram(self, args=[None]) -> None:
   async def starttask() -> None:
 
     aem = AetherMagic(server=settings.MQTT_BROKER, port=settings.MQTT_PORT, ssl=True, user=settings.MQTT_USER, password=settings.MQTT_PASSWORD, union=settings.AETHER_UNION)
-    telegram = Telegram()
 
     async with asyncio.TaskGroup() as group:
       group.create_task(aem.main())

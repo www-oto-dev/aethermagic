@@ -21,21 +21,24 @@ The goal is to create communication between microservices, using such advantages
 from aethermagic import AetherMagic, aether
 
 async def complete(ae, success, output_data):
-  # success => True / False
-  # output_data => user-defined data unserialize from JSON
   print('complete')
 
 async def status(ae, complete, success, progress, output_data):
-  # complete => True / False
-  # success => True / False
-  # progress => 0...100
-  # output_data => user-defined data unserialize from JSON
   print('status')
 
-input_data = {} # user-defined data to serialize into JSON
+input_data = {}
 await aether(None, 'worker', 'collect', on_complete=complete, on_status=status).perform(input_data)
 
 ```
+
+Variables and values:
+- `complete` True / False
+- `success` True / False
+- `progress` 0...100
+- `input_data` user-defined data to serialize into JSON
+- `output_data` user-defined data unserialized from JSON
+  
+
 
 ### To perform task on worker-server / separate process:
 
@@ -46,14 +49,10 @@ from aethermagic import AetherMagic, aether
 
 async def perform(ae, input_data):
   print('perform')
-  # output_data => user-defined data unserialize from JSON
 
-  success = sync_to_async(do_something_sync)(input_data)
-  await ae.status(50)
+  await ae.status(100) # Optional
 
-  output_data = await do_something_async(input_data)
-
-  await ae.status(50) # Optional
+  output_data = {}
   await ae.complete(success, output_data)
   
 
@@ -61,6 +60,12 @@ await aether(None, 'worker', 'collect', on_perform=perform).idle()
 
 ```
 
+
+Variables and values:
+- `input_data` user-defined data to serialize into JSON
+- `output_data` user-defined data unserialized from JSON
+
+  
 
 ### AetherMagic requires running or joining an existing async loop:
 

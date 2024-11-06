@@ -47,6 +47,8 @@ class AetherMagic:
 		self.__share_tasks = True # Execute with load balancing, not with all workers at same time
 		self.__action_in_topic = True # Required for shared tasks
 
+		self.__connected = False
+
 		# sharing instance with thread
 		self.__share_instance(self)
 
@@ -123,10 +125,11 @@ class AetherMagic:
 				# CONNECTED HERE
 
 					print("MQTT: Connected")
+					self.__connected = True
 
 					# While we do not have incomming actions to process
 					#while len(self.__incoming) == 0:
-					while True:
+					while self.__connected:
 
 						# Sending online (within queue) if just connected
 						if just_connected:
@@ -148,9 +151,10 @@ class AetherMagic:
 						#await self.__send_outgoing(self.__mqtt) #TODO: Do we need it here as well?
 
 						# Recieving incoming
-						has_incoming, has_perform = await self.__recieve_incoming(self.__mqtt)
+						has_new_incoming = await self.__recieve_incoming(self.__mqtt)
 
 						# Replying immediatly for some incomming messages
+						#if has_incoming:
 						await self.__reply_incoming_immediate()
 
 						# Sending outgoing (if any new)
@@ -160,8 +164,10 @@ class AetherMagic:
 						await self.__unsubscribe_required_listeners(self.__mqtt)						
 						
 						# Processing incomming
-						if has_incoming:
+						if len(self.__incoming) > 0:
 							
+							has_perform = await self.__detect_perform()
+
 							# If there is a perform action - it is shared, we need to unsubscribe
 							# to allow others to get tasks while we are executing this one
 							# without counting us in order of recieving new task
@@ -185,6 +191,8 @@ class AetherMagic:
 
 			except aiomqtt.MqttError:
 				print("MQTT: Connection lost; Reconnecting ...")
+				#self.__incoming = [] # TODO: Should we continue capturing incoming after failier?
+				self.__connected = False
 				await asyncio.sleep(failed_connection_interval)
 
 
@@ -314,10 +322,10 @@ class AetherMagic:
 		self.__outgoing = []
 
 
+
 	async def __recieve_incoming(self, mqtt):
 
-		has_incoming = False
-		has_perform = False
+		has_new_incoming = False
 
 		if len(mqtt.messages) > 0:
 
@@ -330,18 +338,33 @@ class AetherMagic:
 				# Addig to queue
 				incomming = {'topic':topic, 'payload':payload}
 				self.__incoming.append(incomming)
-				has_incoming = True
-
-				# Splitting
-				topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts_(incomming)
-				if action == 'perform': has_perform = True
+				has_new_incoming = True
 
 				# Skipping for the next cycle
 				#if len(mqtt.messages) == 0: raise aiomqtt.MqttError("Next") from None
 				if len(mqtt.messages) == 0: break
 
 
-		return has_incoming, has_perform
+		return has_new_incoming
+
+
+	async def __detect_perform(self):
+
+		has_perform = False
+
+		for incomming in self.__incoming:
+			
+			# Splitting
+			topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts_(incomming)
+			if action == 'perform': 
+				has_perform = True
+				break
+
+
+		return has_perform
+
+
+
 
 	def __incoming_parts_(self, incoming):
 
@@ -428,7 +451,7 @@ class AetherMagic:
 
 			handler = listener['handler']
 			if not handler is None:
-				await handler(action, tid, data, fulldata)			
+				await handler(action, tid, data, fulldata)
 
 
 
@@ -453,16 +476,31 @@ class AetherMagic:
 
 	async def __send_immediate(self, job, workgroup, task, context, action, tid, payload, retain=False):
 
-		topic = self.__union + '/' + job + '/' + task + '/' + context + '/' + tid
-		if self.__action_in_topic: topic = topic + '/' + action
-		 
-		retain=False # Forsing NOT to retain
+		if self.__connected:
 
-		# Connecting and sending
-		#mqtt = await self.__new_mqtt()
-		#async with mqtt:
-		if self.__mqtt is not None:
-			await self.__mqtt.publish(topic, payload, retain=retain)
+
+			try:
+				topic = self.__union + '/' + job + '/' + task + '/' + context + '/' + tid
+				if self.__action_in_topic: topic = topic + '/' + action
+				 
+				retain=False # Forsing NOT to retain
+
+				# Connecting and sending
+				#mqtt = await self.__new_mqtt()
+				#async with mqtt:
+				if self.__mqtt is not None:
+					await self.__mqtt.publish(topic, payload, retain=retain)
+
+			except aiomqtt.MqttError:
+				print("MQTT: Can not send immediate ...")
+				# adding to queue and marking as connection error
+				self.__connected = False
+				await self.__send_to_queue(job, workgroup, task, context, action, tid, payload, retain)
+
+		else:
+			# Sending to queue if not connected
+			await self.__send_to_queue(job, workgroup, task, context, action, tid, payload, retain)
+
 
 
 	async def __send(self, job, workgroup, task, context, action, tid, payload, retain=False,  immediate=False):

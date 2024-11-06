@@ -53,6 +53,7 @@ async def perform(ae, input_data):
   await ae.status(100) # Optional
 
   output_data = {}
+  success = True
   await ae.complete(success, output_data)
   
 

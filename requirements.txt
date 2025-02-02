@@ -2,3 +2,4 @@ asyncio-mqtt==0.16.2
 asgiref==3.8.1
 paho-mqtt==2.1.0
 aiomqtt @ git+https://github.com/sbtinstruments/asyncio-mqtt@8eaff6b01445f65060301d0a2aea2de669e69887
+certifi

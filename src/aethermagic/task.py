@@ -39,33 +39,45 @@ class AetherTask():
 #		return inner
 
 
-	def wait_(self):
-		async_to_sync(self.wait)()
+	def tid_(self):
+		return self.__tid
+
+	def idle_(self):
+		return async_to_sync(self.idle)()
 
 	def perform_(self, data={}):
-		async_to_sync(self.perform)(data)
+		return async_to_sync(self.perform)(data)
 
 	def status_(self, progress, data={}, immediate=False):
-		async_to_sync(self.status)(progress, data, immediate)
+		return async_to_sync(self.status)(progress, data, immediate)
 
 	def complete_(self, success, data={}):
-		async_to_sync(self.complete)(success, data)
+		return async_to_sync(self.complete)(success, data)
 
+
+	async def tid(self):
+		return self.__tid
 
 	async def idle(self):
 		if not self.__on_perform_func is None:  
 			if not self.__instance is None:
 				await self.__instance.idle(self.__job, self.__workgroup, self.__task, self.__context, self.__tid, {}, self.on_handle)
 
+		return self.__tid
+
 
 	async def perform(self, data={}):
 		if not self.__instance is None:
 			await self.__instance.perform(self.__job, self.__workgroup, self.__task, self.__context, self.__tid, data, self.on_handle)
 
+		return self.__tid
+
 
 	async def complete(self, success, data={}):
 		if not self.__instance is None:
 			await self.__instance.complete(self.__job, self.__workgroup, self.__task, self.__context, self.__tid, data, None, success)
+
+		return self.__tid
 
 
 	async def status(self, progress, data={}, immediate=False):
@@ -75,6 +87,8 @@ class AetherTask():
 
 		if not self.__instance is None:
 			await self.__instance.status(self.__job, self.__workgroup, self.__task, self.__context, self.__tid, data, None, progress, immediate=immediate)
+
+		return self.__tid
 
 
 	async def on_handle(self, action, tid, data, fulldata):

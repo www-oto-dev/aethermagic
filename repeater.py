@@ -48,7 +48,7 @@ class MQTTRepeater:
 
     async def _handle_message(self, message):
         topic = str(message.topic)
-        payload = message.payload.decode("utf-8")
+        payload = message.payload #.decode("utf-8")
         parts = topic.split("/")
 
         if len(parts) != 6:
@@ -68,7 +68,7 @@ class MQTTRepeater:
                 if info.get("union") == union:
                     removed.append(existing_tid)
                     del self._tasks[existing_tid]
-            print(f"🧹 Cleared {len(removed)} tasks for union: {union}")
+            print(f"⚠️ | {union} | xxxxxxxx | ✖️ Cleared {len(removed)} tasks")
             return
 
         if action == "perform":
@@ -88,19 +88,16 @@ class MQTTRepeater:
                     "retain": message.retain,
                     "union": union,
                 }
+                
+                print(f"*️⃣ | {union} | {tid} | ➕ Added task for tracking              | {topic}")
             
-                print(f"🆕 Added task for tracking: tid={tid}, union={union}, action={action}, topic={topic}")
-            
-            #else:
-            #    print(f"〰️ Skipping retracking task: tid={tid}, union={union}, action={action}, topic={topic}")
-
 
         elif action in ("status", "complete"):
             if tid in self._tasks:
                 removed = self._tasks.pop(tid)
-                print(f"✅ Removed task: tid={tid}, union={union}, action={action}, topic(removed)={removed['topic']}")
-            else:
-                print(f"⚠️ Got {action} for unknown tid={tid}")
+                print(f"↩️ | {union} | {tid} | ➖ Removed task from tracking           | {topic}")
+            #else:
+            #    print(f"▫️ | {union} | {tid} | 〰️ Unknown  task id (tid)               | {topic} | action={action} ")
 
 
     async def _resend_loop(self, client):
@@ -108,10 +105,16 @@ class MQTTRepeater:
             now = datetime.now(timezone.utc)
             to_remove = []
 
+            was_repeated_in_cycle = False
+
             for tid, info in list(self._tasks.items()):
 
+
+                union = info["union"]
+                topic = info["topic"]
+
                 if info["timeout"] > TIMEOUT_MAX:
-                    print(f"✖️ Removing untracked timeouted task with tid={tid}, removing from queue.")
+                    print(f"🆘 | {union} | {tid} | ✖️ Maximum timeout riched, untracking   | {topic}")
                     to_remove.append(tid)                    
                     continue
 
@@ -120,16 +123,20 @@ class MQTTRepeater:
 
                     new_timeout = info['timeout'] + TIMEOUT_STEP
 
+                    if not was_repeated_in_cycle:
+                        print('   ')
+                        was_repeated_in_cycle = True
 
-                    print(f"🔁 Resending task: tid={tid}, topic={info['topic']}, "
-                          f"after timeout={info['timeout']}, new timeout={new_timeout}s")
+
+                    print(f"🛜 | {union} | {tid} | 🟰 Repeating task                       | {topic}, "
+                          f" | after timeout={info['timeout']}, new timeout={new_timeout}s")
 
                     # Update timestamp and double timeout
                     #self._tasks[tid]["timestamp"] = now # NOT overwrinting the timestamp
                     self._tasks[tid]["timeout"] = new_timeout
 
                     if new_timeout > TIMEOUT_MAX:
-                        print(f"🕑 Timeout exceeded for tid={tid}, removing from tracking.")
+                        print(f"⏹️ | {union} | {tid} | ✖️ Removing, reason: timeout            | {topic}")
                         self._tasks[tid]["tracking"] = False
                         
                     # !IMPORTANT: RESENDING AFTER UPDATING THE TASK

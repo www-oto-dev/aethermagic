@@ -76,7 +76,7 @@ class MQTTRepeater:
             preserved_timeout = max(previous.get("timeout", TIMEOUT_MIN), TIMEOUT_MIN)  
 
             
-            if previous.get("topic", "") == "":
+            if previous.get("topic", "") == "" and payload != None and payload != '' and payload != b'':
                 self._tasks[tid] = {
                     "tracking" : True,
                     "payload": payload,

@@ -1,0 +1,15 @@
+[Unit]
+Description=MQTT Repeater Service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/repeater
+ExecStart=/srv/repeater/venv/bin/python /srv/repeater/repeater.py
+Restart=always
+RestartSec=5
+User=www-data
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

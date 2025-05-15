@@ -58,24 +58,24 @@ class AetherTask():
 	async def tid(self):
 		return self.__tid
 
-	async def idle(self):
+	async def idle(self, immediate=False):
 		if not self.__on_perform_func is None:  
 			if not self.__instance is None:
-				await self.__instance.idle(self.__job, self.__workgroup, self.__task, self.__context, self.__tid, {}, self.on_handle)
+				await self.__instance.idle(self.__job, self.__workgroup, self.__task, self.__context, self.__tid, {}, self.on_handle, immediate=immediate)
 
 		return self.__tid
 
 
-	async def perform(self, data={}):
+	async def perform(self, data={}, immediate=False):
 		if not self.__instance is None:
-			await self.__instance.perform(self.__job, self.__workgroup, self.__task, self.__context, self.__tid, data, self.on_handle)
+			await self.__instance.perform(self.__job, self.__workgroup, self.__task, self.__context, self.__tid, data, self.on_handle, immediate=immediate)
 
 		return self.__tid
 
 
-	async def complete(self, success, data={}):
+	async def complete(self, success, data={}, immediate=False):
 		if not self.__instance is None:
-			await self.__instance.complete(self.__job, self.__workgroup, self.__task, self.__context, self.__tid, data, None, success)
+			await self.__instance.complete(self.__job, self.__workgroup, self.__task, self.__context, self.__tid, data, None, success, immediate=immediate)
 
 		return self.__tid
 

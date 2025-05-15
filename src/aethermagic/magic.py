@@ -509,34 +509,35 @@ class AetherMagic:
 
 
 
-	async def idle(self, job, workgroup, task, context, tid, data, on_handle):
+	async def idle(self, job, workgroup, task, context, tid, data, on_handle, immediate=False):
 		if on_handle is not None: await self.subscribe(job, workgroup, task, context, tid, 'perform', on_handle)
 		payload = self.__data_to_payload_('idle', 'online', 100, data)
-		await self.__send(job, workgroup, task, context, 'idle', tid, payload, retain=False)
+		await self.__send(job, workgroup, task, context, 'idle', tid, payload, retain=False, immediate=immediate)
 
 
-	async def perform(self, job, workgroup, task, context, tid, data, on_handle):
+	async def perform(self, job, workgroup, task, context, tid, data, on_handle, immediate=False):
 		if on_handle is not None: 
 			await self.subscribe(job, workgroup, task, context, tid, 'status', on_handle)
 			await self.subscribe(job, workgroup, task, context, tid, 'complete', on_handle)
 		payload = self.__data_to_payload_('perform', 'initialized', 0, data)
-		await self.__send(job, workgroup, task, context, 'perform', tid, payload, retain=True)
+		await self.__send(job, workgroup, task, context, 'perform', tid, payload, retain=False, immediate=immediate)
 
 
-	async def complete(self, job, workgroup, task, context, tid, data, on_handle, success=True):
+	async def complete(self, job, workgroup, task, context, tid, data, on_handle, success=True, immediate=False):
 		result = 'succeed' if success else 'failed'
 		payload = self.__data_to_payload_('complete', result, 100, data)
-		await self.__send(job, workgroup, task, context, 'complete', tid, payload, retain=False)
+		await self.__send(job, workgroup, task, context, 'complete', tid, payload, retain=False, immediate=immediate)
 
-	async def status(self, job, workgroup, task, context, tid, data, on_handle, progress=0, immediate=True):
+
+	async def status(self, job, workgroup, task, context, tid, data, on_handle, progress=0, immediate=False):
 		payload = self.__data_to_payload_('status', 'progress', progress, data)
 		await self.__send(job, workgroup, task, context, 'status', tid, payload, retain=False, immediate=immediate)
 
 
-	async def dismiss(self, job, workgroup, task, context, tid, data, on_handle):
+	async def dismiss(self, job, workgroup, task, context, tid, data, on_handle, immediate=False):
 		if on_handle is not None: await self.unsubscribe(job, workgroup, task, context, tid, 'complete', on_handle)
 		payload = self.__data_to_payload_('dismiss', 'dismissed', 100, data)
-		await self.__send(job, workgroup, task, context, 'dismiss', tid, payload, retain=False)
+		await self.__send(job, workgroup, task, context, 'dismiss', tid, payload, retain=False, immediate=immediate)
 
 
 	async def online(self, job, workgroup, task, context, tid, data, on_handle):

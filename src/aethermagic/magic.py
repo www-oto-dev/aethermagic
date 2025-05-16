@@ -333,16 +333,21 @@ class AetherMagic:
 				
 				topic = str(message.topic)
 				payload = message.payload
-				print("MQTT: Recieved " + topic)
 
-				# Addig to queue
-				incomming = {'topic':topic, 'payload':payload}
-				self.__incoming.append(incomming)
-				has_new_incoming = True
+				if topic != '' and payload != None and payload != '' and payload != b'':
+					print("MQTT: Recieved " + topic)
 
-				# Skipping for the next cycle
-				#if len(mqtt.messages) == 0: raise aiomqtt.MqttError("Next") from None
-				if len(mqtt.messages) == 0: break
+					# Addig to queue
+					incomming = {'topic':topic, 'payload':payload}
+					self.__incoming.append(incomming)
+					has_new_incoming = True
+
+					# Skipping for the next cycle
+					#if len(mqtt.messages) == 0: raise aiomqtt.MqttError("Next") from None
+					if len(mqtt.messages) == 0: break
+				
+				else:
+					print("MQTT: Ignoting " + topic)
 
 
 		return has_new_incoming

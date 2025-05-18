@@ -429,7 +429,7 @@ class AetherMagic:
 			topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts_(incoming)
 
 			if action == 'perform':
-				# Sending immidiate message with progress == 0 to let know that we recieved the task
+				# Sending message with progress == 0 to let know that we recieved the task
 				await self.status(job, "", task, context, tid, {}, None, 0, immediate=False) # NOT immediate to send, using queue, as soon as we have a connection
 
 			elif action == 'complete':

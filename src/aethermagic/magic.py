@@ -495,6 +495,7 @@ class AetherMagic:
 				#async with mqtt:
 				if self.__mqtt is not None:
 					await self.__mqtt.publish(topic, payload, retain=retain)
+					await asyncio.sleep(1) # Returning control to async loop to perform the action
 
 			except aiomqtt.MqttError:
 				print("MQTT: Can not send immediate ...")

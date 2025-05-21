@@ -130,18 +130,14 @@ class AetherTask():
 
 
 		if callback_perform is not None:
-			if asyncio.iscoroutinefunction(callback_perform): await callback_perform(self, data)
-			else: await sync_to_async(callback_perform)(self, data)
+			asyncio.create_task(callback_perform(self, data))
 
 		if callback_status is not None:
-			if asyncio.iscoroutinefunction(callback_status): await callback_status(self, complete, succeed, progress, data)
-			else: await sync_to_async(callback_status)(self, complete, succeed, progress, data)
+			asyncio.create_task(callback_status(self, complete, succeed, progress, data))
 
 		if callback_complete is not None:
-			if asyncio.iscoroutinefunction(callback_complete): await callback_complete(self, succeed, data)
-			else: await sync_to_async(callback_complete)(self, succeed, data)
+			asyncio.create_task(callback_complete(self, succeed, data))
 
 		if callback_cancel is not None:
-			if asyncio.iscoroutinefunction(callback_cancel): await callback_cancel(self, data)
-			else: await sync_to_async(callback_cancel)(self, data)
+			asyncio.create_task(callback_cancel(self, data))
 

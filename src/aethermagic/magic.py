@@ -297,9 +297,12 @@ class MultiProtocolAetherMagic:
         self.__outgoing = []
     
     def __topic_for_listener(self, listener) -> str:
-        """Generate topic string for a listener"""
+        """Generate topic string for a listener - restore original shared subscription logic"""
         # For subscription, use wildcard '+' for perform actions to catch any tid
         tid_for_subscription = '+' if listener['action'] == 'perform' else listener['tid']
+        
+        # Use shared subscriptions for perform actions (task distribution)
+        use_shared = listener['action'] == 'perform' and self.__share_tasks
         
         return self.protocol.generate_topic(
             listener['job'],
@@ -307,7 +310,7 @@ class MultiProtocolAetherMagic:
             listener['context'],
             tid_for_subscription,  # Use '+' for perform subscriptions
             listener['action'],
-            shared=False,  # NO shared subscriptions - just regular MQTT
+            shared=use_shared,  # Enable shared subscriptions for task distribution
             workgroup=listener['workgroup']
         )
     

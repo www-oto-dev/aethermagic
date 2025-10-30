@@ -7,24 +7,25 @@ AetherMagic is a powerful multi-protocol communication library for microservices
 
 ## Supported Protocols
 
-### 1. MQTT (original)
+### 1. MQTT (original) - **Best for Task Distribution**
 - Lightweight protocol for IoT and microservices
-- Shared subscriptions support for load balancing
+- **Shared subscriptions** for automatic load balancing
+- Built-in task distribution among multiple workers
 - SSL/TLS encryption
 
 ### 2. Redis Pub/Sub + Streams
 - **Pub/Sub**: Fast in-memory message delivery
-- **Streams**: Reliable delivery with guarantees and consumer groups
-- High performance
+- **Streams**: Reliable delivery with load-balanced consumer groups
+- High performance, atomic operations
 
-### 3. HTTP/WebSocket
-- **HTTP**: REST API for reliable delivery
-- **WebSocket**: Real-time communication
+### 3. WebSocket
+- Real-time bidirectional communication
+- Built-in load balancing with random client selection
 - Web interface compatibility
 
 ### 4. ZeroMQ
-- High-performance messaging
-- Various patterns: PUB/SUB, PUSH/PULL, REQ/REP
+- High-performance messaging with natural load balancing
+- PUSH/PULL pattern for automatic task distribution
 - Brokerless architecture
 
 ## Installation
@@ -141,6 +142,43 @@ await client_task.perform({
     "options": {"format": "json"}
 })
 ```
+
+## Task Distribution & Load Balancing
+
+AetherMagic automatically distributes tasks among multiple workers for all protocols:
+
+### MQTT with Shared Subscriptions
+```python
+# Multiple workers subscribe to shared topic
+# $share/union_job_workgroup/union/job/task/context/+/perform
+await aether.listen('image-process', 'resize', 'batch1', 'perform', 'workers', handle_task)
+```
+
+### Redis with Consumer Groups  
+```python
+# Atomic LPUSH/BRPOP operations ensure single delivery
+await aether.listen('image-process', 'resize', 'batch1', 'perform', 'workers', handle_task)
+```
+
+### WebSocket with Random Selection
+```python
+# Tasks distributed randomly among connected clients
+await aether.listen('image-process', 'resize', 'batch1', 'perform', 'workers', handle_task)  
+```
+
+### ZeroMQ PUSH/PULL Pattern
+```python  
+# Natural load balancing with PUSH/PULL sockets
+await aether.listen('image-process', 'resize', 'batch1', 'perform', 'workers', handle_task)
+```
+
+**Key Benefits:**
+- 🔄 **Automatic load balancing** - tasks distributed among available workers
+- 🚫 **No duplicate processing** - each task handled by exactly one worker  
+- 📈 **Horizontal scaling** - add more workers to increase capacity
+- 🛡️ **Fault tolerance** - failed workers don't block other workers
+
+See [TASK_DISTRIBUTION.md](TASK_DISTRIBUTION.md) for detailed examples.
 
 ## Protocol Selection Guide
 

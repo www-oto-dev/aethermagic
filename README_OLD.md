@@ -1,9 +1,6 @@
 # AetherMagic - Multi-Protocol Microservices Communication
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-AetherMagic is a powerful multi-protocol communication library for microservices, providing a unified API for different transport mechanisms including MQTT, Redis, HTTP/WebSocket, and ZeroMQ.
+AetherMagic now supports multiple communication protocols for microservices, providing a unified API for different transport mechanisms.
 
 ## Supported Protocols
 
@@ -261,77 +258,3 @@ aether = AetherMagic(server="localhost", port=1883)
 ```
 
 The new API is fully compatible and adds additional capabilities.
-
-## Load Balancing Support
-
-AetherMagic now supports load-balanced task distribution to ensure each task is processed by only one worker:
-
-### Protocol-Specific Load Balancing
-
-#### Redis Protocol
-- **RedisLoadBalancedProtocol**: Uses Redis lists (LPUSH/BRPOP) for atomic task distribution
-- Each task goes to exactly one available worker
-- FIFO processing with blocking pop operations
-
-```python
-from aethermagic.protocols.redis_protocol import RedisLoadBalancedProtocol
-
-worker = RedisLoadBalancedProtocol(config, consumer_id="worker_1")
-await worker.subscribe_to_tasks("job", "task", "context", callback)
-```
-
-#### MQTT Protocol  
-- Uses shared subscriptions with `$share` prefix
-- Broker distributes messages among group subscribers
-- Built-in load balancing at protocol level
-
-#### ZeroMQ Protocol
-- Uses PUSH/PULL socket pattern for task distribution  
-- Round-robin delivery to connected workers
-- No message duplication - perfect for task distribution
-
-#### WebSocket Protocol
-- Implements random selection among subscribed clients
-- Tasks with 'shared:' or 'tasks:' prefixes are load balanced
-- Single delivery guaranteed per task
-
-### Multi-Protocol Load Balancing API
-
-Use the new convenience methods for load-balanced task processing:
-
-```python
-from aethermagic import AetherMagic, ProtocolType
-
-# Create workers  
-worker = AetherMagic(protocol_type=ProtocolType.REDIS, host="localhost", port=6379)
-await worker.connect()
-
-# Add load-balanced task handler
-await worker.add_task(
-    job="processing",
-    task="compute", 
-    context="demo",
-    callback=task_handler,
-    shared=True  # Enable load balancing
-)
-
-# Publish load-balanced tasks
-await worker.perform_task(
-    job="processing",
-    task="compute",
-    context="demo", 
-    data={"work": "data"},
-    shared=True  # Only one worker will receive this
-)
-```
-
-### Single Delivery Guarantees
-
-- **Redis**: Atomic LPUSH/BRPOP operations ensure single delivery
-- **MQTT**: Broker's shared subscription handles distribution  
-- **ZeroMQ**: PUSH/PULL pattern is inherently load-balanced
-- **WebSocket**: Random selection with connection tracking
-
-All protocols now support the `shared=True` parameter for load-balanced task distribution.
-
-See `load_balanced_demo.py` for complete working examples.

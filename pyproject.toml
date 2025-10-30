@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aethermagic"
-version = "0.0.11"
+version = "0.1.8"
 authors = [
   { name="Michael Galizki", email="michael@galizki.com" },
 ]
-description = "AetherMagic - Communications between microservices over MQTT"
+description = "AetherMagic - Multi-protocol communications between microservices (MQTT, Redis, HTTP/WebSocket, ZeroMQ)"
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [

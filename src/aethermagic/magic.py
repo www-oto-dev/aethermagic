@@ -1,569 +1,608 @@
+"""
+Enhanced AetherMagic with Multi-Protocol Support
+"""
 
 import threading
 from uuid import uuid1
 import json
-import certifi
 import socket
-from functools import wraps
-
 import asyncio
-from asyncio import Queue
-from asgiref.sync import async_to_sync, sync_to_async
-import paho.mqtt.client as mqtt
-import aiomqtt
+from typing import Optional, Dict, Any, List, Union
+from enum import Enum
+
+from .protocols import (
+    ProtocolInterface, ConnectionConfig, AetherMessage, ProtocolType,
+    SUBSTATE
+)
+
+# Import protocol implementations
+from .protocols.redis_protocol import RedisProtocol, RedisStreamProtocol
+from .protocols.websocket_protocol import WebSocketProtocol
+from .protocols.zeromq_protocol import ZeroMQProtocol
+from .protocols.mqtt_protocol import MQTTProtocol
 
 
+class ProtocolFactory:
+    """Factory for creating protocol instances"""
+    
+    @staticmethod
+    def create_protocol(config: ConnectionConfig, **kwargs) -> ProtocolInterface:
+        """Create appropriate protocol instance based on config"""
+        
+        if config.protocol_type == ProtocolType.MQTT:
+            return MQTTProtocol(config)
+            
+        elif config.protocol_type == ProtocolType.REDIS:
+            use_streams = config.extra_params.get('use_streams', False)
+            if use_streams:
+                consumer_group = config.extra_params.get('consumer_group', 'workers')
+                consumer_name = config.extra_params.get('consumer_name', None)
+                return RedisStreamProtocol(config, consumer_group, consumer_name)
+            else:
+                return RedisProtocol(config)
+                
+        elif config.protocol_type == ProtocolType.HTTP:
+            mode = config.extra_params.get('mode', 'client')
+            return WebSocketProtocol(config, mode)
+            
+        elif config.protocol_type == ProtocolType.WEBSOCKET:
+            mode = config.extra_params.get('mode', 'client')  
+            return WebSocketProtocol(config, mode)
+            
+        elif config.protocol_type == ProtocolType.ZEROMQ:
+            pattern = config.extra_params.get('pattern', 'pubsub')
+            return ZeroMQProtocol(config, pattern)
+            
+        else:
+            raise ValueError(f"Unsupported protocol: {config.protocol_type}")
 
 
-class SUBSTATE:
-     TO_SUBSCRIBE, SUBSCRIBED, TO_UNSUBSCRIBE, UNSUBSCRIBED  = range(4)
-
+# MQTTProtocolWrapper removed - using direct MQTTProtocol implementation
 
 
 shared_instances = {}
 shared_instances_lock = threading.Lock()
 
 
-class AetherMagic:
-
-	def __init__(self, server, port, ssl=True, user='', password='', union='default'):
-		
-		self.__listeners = []
-		self.__outgoing = []
-		self.__incoming = []
-		self.__subscribed = []
-
-		self.__server = server
-		self.__port = port
-		self.__ssl = ssl
-		self.__user = user
-		self.__password = password
-		self.__union = union
-		self.__mqtt = None
-
-		self.__hostname = socket.gethostname()
-		self.__identifier = str(uuid1())
-
-		self.__share_tasks = True # Execute with load balancing, not with all workers at same time
-		self.__action_in_topic = True # Required for shared tasks
-
-		self.__connected = False
-
-		# sharing instance with thread
-		self.__share_instance(self)
-
-
-
-	def __share_instance(self, instance):
-
-		global shared_instances
-		global shared_instances_lock
-
-		with shared_instances_lock:
-			threadid = threading.get_ident()
-
-			if instance is not None:
-				shared_instances[threadid] = instance
-
-		return
-
-
-	def shared():
-
-		instance = None
-
-		global shared_instances
-		global shared_instances_lock
-
-		with shared_instances_lock:
-			threadid = threading.get_ident()
-
-			if threadid in shared_instances:
-				instance = shared_instances[threadid]
-
-		return instance
-
-
-	async def __new_mqtt(self):
-
-		tls_params = aiomqtt.TLSParameters(
-		    ca_certs=certifi.where(),
-		)		
-
-		return aiomqtt.Client(
-			hostname=self.__server,
-			port=self.__port,
-			username=self.__user if not self.__user == '' else None,
-			password=self.__password if not self.__user == '' else None,
-			identifier=self.__identifier,
-			tls_context=None,
-			tls_params=tls_params if self.__ssl else None,
-			timeout=10,
-			keepalive=10,
-			clean_session=True,
-			#max_queued_incoming_messages=1, # NOT USE: Cases WARNING - Message queue is full. Discarding message.
-		)
-
-
-	async def main(self):
-		
-		# New MQTT object for connection
-		self.__mqtt = await self.__new_mqtt()
-
-		failed_connection_interval = 10  # Seconds
-		
-		while True: # Loop to re-connect
-
-
-			just_connected = True
-
-			try:
-
-
-				# Connection to MQTT. Leaving this block will disconnect
-				async with self.__mqtt:
-				# CONNECTED HERE
-
-					print("MQTT: Connected")
-					self.__connected = True
-
-					# While we do not have incomming actions to process
-					#while len(self.__incoming) == 0:
-					while self.__connected:
-
-						# Sending online (within queue) if just connected
-						if just_connected:
-							await self.online("system", "", "online", self.__hostname, self.__identifier, {}, None)
-							just_connected = False
-
-
-						# Every reconnect it looses subscriptions inside mqtt, so: resubscribe
-						await self.__subscribe_list(self.__mqtt)
-						#self.__subscribed = []
-						#for i in range(len(self.__listeners)): 
-						#	if not (self.__listeners[i]['state'] == SUBSTATE.TO_UNSUBSCRIBE or self.__listeners[i]['state'] == SUBSTATE.UNSUBSCRIBED):
-						#		self.__listeners[i]['state'] = SUBSTATE.TO_SUBSCRIBE
-						
-						# Subscribe and create list
-						await self.__subscribe_required_listeners(self.__mqtt)
-
-						# Sending outgoing
-						#await self.__send_outgoing(self.__mqtt) #TODO: Do we need it here as well?
-
-						# Recieving incoming
-						has_new_incoming = await self.__recieve_incoming(self.__mqtt)
-
-						# Replying immediatly for some incomming messages
-						#if has_incoming:
-						await self.__reply_incoming_immediate()
-
-						# Sending outgoing (if any new)
-						await self.__send_outgoing(self.__mqtt)
-
-						# Unsubscribe and update list
-						await self.__unsubscribe_required_listeners(self.__mqtt)						
-						
-						# Processing incomming
-						if len(self.__incoming) > 0:
-							
-							has_perform = await self.__detect_perform()
-
-							# If there is a perform action - it is shared, we need to unsubscribe
-							# to allow others to get tasks while we are executing this one
-							# without counting us in order of recieving new task
-							# For example, after recieving 'engine/build' we would like
-							# to skip our turn for 'spider/collect' as well, as soon as we are busy
-							if has_perform: await self.__unsubscribe_list__only_shared(self.__mqtt)
-							
-							# Processing incoming messages
-							await self.__process_incoming()
-
-						# Sleep to make possible another actions
-						await asyncio.sleep(0.1)
-
-
-				# DISCONNECTED HERE
-
-				# Processing incoming messages
-				#await self.__process_incoming()
-
-
-
-			except aiomqtt.MqttError:
-				print("MQTT: Connection lost; Reconnecting ...")
-				#self.__incoming = [] # TODO: Should we continue capturing incoming after failier?
-				self.__connected = False
-				await asyncio.sleep(failed_connection_interval)
-
-
-
-
-
-
-
-	def __data_to_fulldata_(self, action, status, progress, data):
-		return {
-				"host" : self.__hostname,
-				"client" : self.__identifier,
-
-				"action" : action,
-				"status" : status,
-				"progress" : progress,
-
-				"data" : data,
-
-			}
-
-
-	def __data_to_payload_(self, action, status, progress, data):
-
-		fulldata = self.__data_to_fulldata_(action, status, progress, data)
-
-		payload = json.dumps(fulldata)
-		return payload
-
-
-	def __payload_to_fulldata_(self, payload):
-
-		try:
-			fulldata = json.loads(payload)
-		except Exception as err:   #json.decoder.JSONDecodeError
-			print(f"Unexpected JSON pasrsing error {err=}, {type(err)=}")
-			fulldata = self.__data_to_fulldata_('complete', 'failed', 0, {})
-
-		return fulldata
-
-
-
-
-
-	def __topic_for_listener_(self, listener):
-
-
-		# Shared subscription for action == perform
-		shared = '$share/' + self.__union + '_' + listener['job'] + '_' + listener['workgroup']
-		if listener['action'] == 'perform' and self.__share_tasks: topic =  shared + '/'
-		else: topic = ''
-
-		# Main topic part
-		topic = topic + self.__union + '/' + listener['job'] + '/' + listener['task'] + '/' + listener['context']
-		
-		# Including action
-		if self.__action_in_topic: topic = topic + '/+/' + listener['action'] 
-		else: topic = topic + '/#'
-
-
-		return topic
-		
-
-	async def __subscribe_list(self, mqtt):
-
-		for subscribed in self.__subscribed:
-			await mqtt.subscribe(subscribed)
-
-
-	async def __unsubscribe_list(self, mqtt):
-
-		for subscribed in self.__subscribed:
-			await mqtt.unsubscribe(subscribed)
-
-	async def __unsubscribe_list__only_shared(self, mqtt):
-		for subscribed in self.__subscribed:
-			if subscribed.startswith('$share/'):
-				await mqtt.unsubscribe(subscribed)
-
-
-	async def __subscribe_required_listeners(self, mqtt):
-
-		for listener in self.__listeners:
-
-			if listener['state'] == SUBSTATE.TO_SUBSCRIBE:
-
-				topic = self.__topic_for_listener_(listener)
-				
-				if not any(topic == s for s in self.__subscribed):
-					print("MQTT: Subscribed to " + topic)
-					await mqtt.subscribe(topic)
-					self.__subscribed.append(topic)
-
-				listener['state'] = SUBSTATE.SUBSCRIBED
-
-	async def __unsubscribe_required_listeners(self, mqtt):
-
-		for listener in self.__listeners:
-
-			if listener['state'] == SUBSTATE.TO_UNSUBSCRIBE:
-				topic = self.__topic_for_listener_(listener)
-
-				listener['state'] = SUBSTATE.UNSUBSCRIBED
-				#self.__listeners.remove(listener)
-
-
-				found = False
-				for check in self.__listeners:
-					checktopic = self.__topic_for_listener_(check)
-					if topic == checktopic and not (check['state']==SUBSTATE.TO_UNSUBSCRIBE or check['state']==SUBSTATE.UNSUBSCRIBED): 
-						found = True
-
-				if not found:
-					if any(topic == s for s in self.__subscribed):
-						print('MQTT: Unubscribed from '+ topic)
-						await mqtt.unsubscribe(topic)
-						self.__subscribed.remove(topic)
-
-
-
-	async def __send_outgoing(self, mqtt):
-
-		for outgoing in self.__outgoing:
-			print("MQTT: Sending " + outgoing['topic'] + " \n" + outgoing['payload'])
-			await mqtt.publish(outgoing['topic'], outgoing['payload'], retain=outgoing['retain'])
-
-		self.__outgoing = []
-
-
-
-	async def __recieve_incoming(self, mqtt):
-
-		has_new_incoming = False
-
-		if len(mqtt.messages) > 0:
-
-			async for message in mqtt.messages:
-				
-				topic = str(message.topic)
-				payload = message.payload
-
-				if topic != '' and payload != None and payload != '' and payload != b'':
-					print("MQTT: Recieved " + topic)
-
-					# Addig to queue
-					incomming = {'topic':topic, 'payload':payload}
-					self.__incoming.append(incomming)
-					has_new_incoming = True
-
-					# Skipping for the next cycle
-					#if len(mqtt.messages) == 0: raise aiomqtt.MqttError("Next") from None
-					if len(mqtt.messages) == 0: break
-				
-				else:
-					print("MQTT: Ignoting " + topic)
-
-
-		return has_new_incoming
-
-
-	async def __detect_perform(self):
-
-		has_perform = False
-
-		for incomming in self.__incoming:
-			
-			# Splitting
-			topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts_(incomming)
-			if action == 'perform': 
-				has_perform = True
-				break
-
-
-		return has_perform
-
-
-
-
-	def __incoming_parts_(self, incoming):
-
-		topic = incoming['topic']
-		payload = incoming['payload'] # bytes
-
-		fulldata = self.__payload_to_fulldata_(payload)
-		data = fulldata['data']
-
-		splitted = topic.split('/')
-		if len(splitted) > 4 :
-			union = splitted[0]
-			job = splitted[1]
-			task = splitted[2]
-			context = splitted[3]
-			tid = splitted[4]
-			#action = splitted[5] # Regulated by self.__action_in_topic
-		else:
-			union = ''
-			job = ''
-			task = ''
-			context = ''
-			tid = ''
-			#action = ''
-
-		if 'action' in fulldata:
-			action = fulldata['action'] # Always so
-		else:
-			action = ''
-
-		return topic, payload, fulldata, data, union, job, task, context, tid, action
-
-
-	async def __for_message_fits_listener(self, incoming, callback):
-		
-		topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts_(incoming)
-
-		if not task == '' and not action == '':
-
-			if self.__union == union:
-				for listener in self.__listeners:
-					if listener['state'] != SUBSTATE.TO_UNSUBSCRIBE: # Important to remove this because of reply_incomming with UNSUBSCRIBED
-						if listener['job'] == job and listener['task'] == task and listener['context'] == context and listener['action'] == action:
-								
-
-							# Checking tid (task id)
-							if tid == listener['tid'] or action == 'perform': # there is no tid for 'perform' action
-
-								await callback(incoming, listener)
-
-
-	async def __reply_incoming_immediate(self):
-
-
-		async def reply(incoming, listener):
-
-			topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts_(incoming)
-
-			if action == 'perform':
-				# Sending message with progress == 0 to let know that we recieved the task
-				await self.status(job, "", task, context, tid, {}, None, 0, immediate=False) # NOT immediate to send, using queue, as soon as we have a connection
-
-			elif action == 'complete':
-				pass
-				# NO: This will avoid completion
-				# We do not keep subscribing to complitance of this task
-				#await self.dismiss(job, "", task, context, tid, {}, listener['handler'])
-
-
-
-		for incoming in self.__incoming:
-			await self.__for_message_fits_listener(incoming, reply)
-
-
-
-
-
-	async def __process_incoming(self):
-
-
-		async def handle(incoming, listener):
-
-			topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts_(incoming)
-
-			handler = listener['handler']
-			if not handler is None:
-				await handler(action, tid, data, fulldata)
-
-
-
-		for incoming in self.__incoming:
-			await self.__for_message_fits_listener(incoming, handle)
-
-
-		# Clearing all incoming
-		self.__incoming = []
-
-
-
-	async def __send_to_queue(self, job, workgroup, task, context, action, tid, payload, retain=False):
-
-		topic = self.__union + '/' + job + '/' + task + '/' + context + '/' + tid
-		if self.__action_in_topic: topic = topic + '/' + action
-		 
-		retain=False # Forsing NOT to retain
-		self.__outgoing.append({'topic':topic, 'payload':payload, 'retain':retain})
-
-	
-
-	async def __send_immediate(self, job, workgroup, task, context, action, tid, payload, retain=False):
-
-		if self.__connected:
-
-
-			try:
-				topic = self.__union + '/' + job + '/' + task + '/' + context + '/' + tid
-				if self.__action_in_topic: topic = topic + '/' + action
-				 
-				retain=False # Forsing NOT to retain
-
-				# Connecting and sending
-				#mqtt = await self.__new_mqtt()
-				#async with mqtt:
-				if self.__mqtt is not None:
-					await self.__mqtt.publish(topic, payload, retain=retain)
-					await asyncio.sleep(1) # Returning control to async loop to perform the action
-
-			except aiomqtt.MqttError:
-				print("MQTT: Can not send immediate ...")
-				# adding to queue and marking as connection error
-				self.__connected = False
-				await self.__send_to_queue(job, workgroup, task, context, action, tid, payload, retain)
-
-		else:
-			# Sending to queue if not connected
-			await self.__send_to_queue(job, workgroup, task, context, action, tid, payload, retain)
-
-
-
-	async def __send(self, job, workgroup, task, context, action, tid, payload, retain=False,  immediate=False):
-		if immediate: await self.__send_immediate(job, workgroup, task, context, action, tid, payload, retain=retain)
-		else:  await self.__send_to_queue(job, workgroup, task, context, action, tid, payload, retain=retain)
-
-
-
-	async def idle(self, job, workgroup, task, context, tid, data, on_handle, immediate=False):
-		if on_handle is not None: await self.subscribe(job, workgroup, task, context, tid, 'perform', on_handle)
-		payload = self.__data_to_payload_('idle', 'online', 100, data)
-		await self.__send(job, workgroup, task, context, 'idle', tid, payload, retain=False, immediate=immediate)
-
-
-	async def perform(self, job, workgroup, task, context, tid, data, on_handle, immediate=False):
-		if on_handle is not None: 
-			await self.subscribe(job, workgroup, task, context, tid, 'status', on_handle)
-			await self.subscribe(job, workgroup, task, context, tid, 'complete', on_handle)
-		payload = self.__data_to_payload_('perform', 'initialized', 0, data)
-		await self.__send(job, workgroup, task, context, 'perform', tid, payload, retain=False, immediate=immediate)
-
-
-	async def complete(self, job, workgroup, task, context, tid, data, on_handle, success=True, immediate=False):
-		result = 'succeed' if success else 'failed'
-		payload = self.__data_to_payload_('complete', result, 100, data)
-		await self.__send(job, workgroup, task, context, 'complete', tid, payload, retain=False, immediate=immediate)
-
-
-	async def status(self, job, workgroup, task, context, tid, data, on_handle, progress=0, immediate=False):
-		payload = self.__data_to_payload_('status', 'progress', progress, data)
-		await self.__send(job, workgroup, task, context, 'status', tid, payload, retain=False, immediate=immediate)
-
-
-	async def dismiss(self, job, workgroup, task, context, tid, data, on_handle, immediate=False):
-		if on_handle is not None: await self.unsubscribe(job, workgroup, task, context, tid, 'complete', on_handle)
-		payload = self.__data_to_payload_('dismiss', 'dismissed', 100, data)
-		await self.__send(job, workgroup, task, context, 'dismiss', tid, payload, retain=False, immediate=immediate)
-
-
-	async def online(self, job, workgroup, task, context, tid, data, on_handle):
-		payload = self.__data_to_payload_('online', 'connected', 100, data)
-		await self.__send(job, workgroup, task, context, 'online', tid, payload, retain=False)
-		
-
-	async def subscribe(self, job, workgroup, task, context, tid, action, handler_func):
-
-		if not handler_func is None:
-
-			self.__listeners.append({'job':job, 'workgroup':workgroup, 'task':task, 'context':context, 'tid':tid, 'action' : action, 'state' : SUBSTATE.TO_SUBSCRIBE, 'handler': handler_func})
-
-
-	async def unsubscribe(self, job, workgroup, task, context, tid, action, handler_func):
-
-
-		for listener in self.__listeners:
-			if listener['job'] == job and listener['task'] == task and listener['context'] == context and listener['action'] == action and listener['handler'] == handler_func:				
-				listener['state'] = SUBSTATE.TO_UNSUBSCRIBE
-
-
-
+class MultiProtocolAetherMagic:
+    """Enhanced AetherMagic with multiple protocol support and backward compatibility"""
+    
+    def __init__(self, 
+                 protocol_type: Union[ProtocolType, str] = None,
+                 host: str = None,
+                 port: int = None,
+                 ssl: bool = False,
+                 username: str = '',
+                 password: str = '',
+                 union: str = 'default',
+                 # Backward compatibility parameters
+                 server: str = None,
+                 user: str = None,
+                 **kwargs):
+        
+        # Backward compatibility: map old parameters to new ones
+        if server is not None:
+            host = server
+            protocol_type = ProtocolType.MQTT
+        if user is not None:
+            username = user
+        
+        # Set defaults based on protocol
+        if protocol_type is None:
+            protocol_type = ProtocolType.MQTT
+        if host is None:
+            host = 'localhost'
+        if port is None:
+            if protocol_type == ProtocolType.MQTT:
+                port = 1883
+            elif protocol_type == ProtocolType.REDIS:
+                port = 6379
+            elif protocol_type == ProtocolType.WEBSOCKET:
+                port = 8080
+            elif protocol_type == ProtocolType.ZEROMQ:
+                port = 5555
+            else:
+                port = 1883
+        
+        self.__listeners = []
+        self.__outgoing = []
+        self.__incoming = []
+        self.__subscribed = []
+
+        # Convert string to enum if needed
+        if isinstance(protocol_type, str):
+            protocol_type = ProtocolType(protocol_type)
+        
+        # Create configuration
+        self.config = ConnectionConfig(
+            protocol_type=protocol_type,
+            host=host,
+            port=port,
+            ssl=ssl,
+            username=username,
+            password=password,
+            union=union,
+            extra_params=kwargs
+        )
+        
+        # Create protocol instance
+        self.protocol = ProtocolFactory.create_protocol(self.config, **kwargs)
+        
+        self.__hostname = socket.gethostname()
+        self.__identifier = str(uuid1())
+        
+        self.__share_tasks = True
+        self.__action_in_topic = True
+        self.__connected = False
+        
+        # Share instance with thread
+        self.__share_instance(self)
+    
+    def __share_instance(self, instance):
+        global shared_instances, shared_instances_lock
+        
+        with shared_instances_lock:
+            threadid = threading.get_ident()
+            if instance is not None:
+                shared_instances[threadid] = instance
+    
+    @staticmethod
+    def shared():
+        """Get shared instance for current thread"""
+        instance = None
+        global shared_instances, shared_instances_lock
+        
+        with shared_instances_lock:
+            threadid = threading.get_ident()
+            if threadid in shared_instances:
+                instance = shared_instances[threadid]
+        
+        return instance
+    
+    async def main(self):
+        """Main connection and message processing loop"""
+        failed_connection_interval = 10
+        
+        while True:
+            just_connected = True
+            
+            try:
+                # Connect to protocol service
+                success = await self.protocol.connect()
+                if not success:
+                    raise Exception("Failed to connect")
+                
+                print(f"{self.config.protocol_type.value.upper()}: Connected")
+                self.__connected = True
+                
+                while self.__connected:
+                    # Send online status if just connected
+                    if just_connected:
+                        await self.online("system", "", "online", self.__hostname, self.__identifier, {}, None)
+                        just_connected = False
+                    
+                    # Subscribe to required listeners
+                    await self.__subscribe_required_listeners()
+                    
+                    # Receive incoming messages
+                    has_new_incoming = await self.__receive_incoming()
+                    
+                    # Reply immediately for some incoming messages
+                    await self.__reply_incoming_immediate()
+                    
+                    # Send outgoing messages
+                    await self.__send_outgoing()
+                    
+                    # Unsubscribe as needed
+                    await self.__unsubscribe_required_listeners()
+                    
+                    # Process incoming messages
+                    if len(self.__incoming) > 0:
+                        has_perform = await self.__detect_perform()
+                        
+                        if has_perform:
+                            await self.__unsubscribe_shared_subscriptions()
+                        
+                        await self.__process_incoming()
+                    
+                    # Brief sleep
+                    await asyncio.sleep(0.1)
+                    
+            except Exception as e:
+                print(f"{self.config.protocol_type.value.upper()}: Connection lost - {e}")
+                self.__connected = False
+                await asyncio.sleep(failed_connection_interval)
+    
+    async def __subscribe_required_listeners(self):
+        """Subscribe to topics for all listeners that need it"""
+        for listener in self.__listeners:
+            if listener['state'] == SUBSTATE.TO_SUBSCRIBE:
+                topic = self.__topic_for_listener(listener)
+                
+                if not any(topic == s for s in self.__subscribed):
+                    print(f"{self.config.protocol_type.value.upper()}: Subscribed to {topic}")
+                    await self.protocol.subscribe(topic)
+                    self.__subscribed.append(topic)
+                
+                listener['state'] = SUBSTATE.SUBSCRIBED
+    
+    async def __unsubscribe_required_listeners(self):
+        """Unsubscribe from topics that are no longer needed"""
+        for listener in self.__listeners:
+            if listener['state'] == SUBSTATE.TO_UNSUBSCRIBE:
+                topic = self.__topic_for_listener(listener)
+                listener['state'] = SUBSTATE.UNSUBSCRIBED
+                
+                # Check if any other listener still needs this topic
+                found = False
+                for check in self.__listeners:
+                    checktopic = self.__topic_for_listener(check)
+                    if (topic == checktopic and 
+                        not (check['state'] == SUBSTATE.TO_UNSUBSCRIBE or 
+                             check['state'] == SUBSTATE.UNSUBSCRIBED)):
+                        found = True
+                
+                if not found and topic in self.__subscribed:
+                    print(f"{self.config.protocol_type.value.upper()}: Unsubscribed from {topic}")
+                    await self.protocol.unsubscribe(topic)
+                    self.__subscribed.remove(topic)
+    
+    async def __unsubscribe_shared_subscriptions(self):
+        """Unsubscribe from shared subscriptions temporarily"""
+        for topic in self.__subscribed:
+            if topic.startswith('$share/') or 'shared.' in topic:
+                await self.protocol.unsubscribe(topic)
+    
+    async def __receive_incoming(self) -> bool:
+        """Receive incoming messages from protocol"""
+        has_new_incoming = False
+        
+        try:
+            messages = await self.protocol.receive_messages()
+            
+            for msg in messages:
+                topic = msg['topic']
+                payload = msg['payload']
+                
+                if topic and payload:
+                    print(f"{self.config.protocol_type.value.upper()}: Received {topic}")
+                    
+                    incoming = {'topic': topic, 'payload': payload}
+                    self.__incoming.append(incoming)
+                    has_new_incoming = True
+        
+        except Exception as e:
+            print(f"Receive error: {e}")
+        
+        return has_new_incoming
+    
+    async def __send_outgoing(self):
+        """Send all queued outgoing messages"""
+        for outgoing in self.__outgoing:
+            topic = outgoing['topic']
+            payload_str = outgoing['payload']
+            retain = outgoing['retain']
+            
+            try:
+                # Parse payload to create AetherMessage
+                payload_data = json.loads(payload_str)
+                message = AetherMessage.from_dict(payload_data)
+                
+                print(f"{self.config.protocol_type.value.upper()}: Sending {topic}")
+                await self.protocol.publish(topic, message, retain)
+                
+            except Exception as e:
+                print(f"Send error: {e}")
+        
+        self.__outgoing = []
+    
+    def __topic_for_listener(self, listener) -> str:
+        """Generate topic string for a listener"""
+        shared = (listener['action'] == 'perform' and self.__share_tasks)
+        
+        return self.protocol.generate_topic(
+            listener['job'],
+            listener['task'], 
+            listener['context'],
+            listener['tid'],
+            listener['action'],
+            shared
+        )
+    
+    def __data_to_fulldata(self, action, status, progress, data):
+        """Convert data to full message format"""
+        return {
+            "host": self.__hostname,
+            "client": self.__identifier,
+            "action": action,
+            "status": status,
+            "progress": progress,
+            "data": data,
+        }
+    
+    def __data_to_payload(self, action, status, progress, data):
+        """Convert data to JSON payload"""
+        fulldata = self.__data_to_fulldata(action, status, progress, data)
+        return json.dumps(fulldata)
+    
+    def __payload_to_fulldata(self, payload):
+        """Parse JSON payload to full data"""
+        try:
+            if isinstance(payload, bytes):
+                payload = payload.decode('utf-8')
+            fulldata = json.loads(payload)
+        except Exception as err:
+            print(f"JSON parsing error {err}")
+            fulldata = self.__data_to_fulldata('complete', 'failed', 0, {})
+        return fulldata
+    
+    def __incoming_parts(self, incoming):
+        """Extract components from incoming message"""
+        topic = incoming['topic']
+        payload = incoming['payload']
+        
+        fulldata = self.__payload_to_fulldata(payload)
+        data = fulldata['data']
+        
+        # Parse topic using protocol's parser
+        parts = self.protocol.parse_topic(topic)
+        
+        union = parts.get('union', '')
+        job = parts.get('job', '')
+        task = parts.get('task', '')
+        context = parts.get('context', '')
+        tid = parts.get('tid', '')
+        action = fulldata.get('action', parts.get('action', ''))
+        
+        return topic, payload, fulldata, data, union, job, task, context, tid, action
+    
+    async def __detect_perform(self) -> bool:
+        """Check if any incoming message is a 'perform' action"""
+        for incoming in self.__incoming:
+            _, _, _, _, _, _, _, _, _, action = self.__incoming_parts(incoming)
+            if action == 'perform':
+                return True
+        return False
+    
+    async def __reply_incoming_immediate(self):
+        """Send immediate replies for certain message types"""
+        async def reply(incoming, listener):
+            topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts(incoming)
+            
+            if action == 'perform':
+                # Send progress 0 to acknowledge task receipt
+                await self.status(job, "", task, context, tid, {}, None, 0, immediate=False)
+        
+        for incoming in self.__incoming:
+            await self.__for_message_fits_listener(incoming, reply)
+    
+    async def __process_incoming(self):
+        """Process all incoming messages"""
+        async def handle(incoming, listener):
+            topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts(incoming)
+            
+            handler = listener['handler']
+            if handler is not None:
+                await handler(action, tid, data, fulldata)
+        
+        for incoming in self.__incoming:
+            await self.__for_message_fits_listener(incoming, handle)
+        
+        self.__incoming = []
+    
+    async def __for_message_fits_listener(self, incoming, callback):
+        """Check if incoming message fits any listener and call callback"""
+        topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts(incoming)
+        
+        if task and action and union == self.config.union:
+            for listener in self.__listeners:
+                if listener['state'] != SUBSTATE.TO_UNSUBSCRIBE:
+                    if (listener['job'] == job and 
+                        listener['task'] == task and 
+                        listener['context'] == context and 
+                        listener['action'] == action):
+                        
+                        if tid == listener['tid'] or action == 'perform':
+                            await callback(incoming, listener)
+    
+    async def __send_to_queue(self, job, workgroup, task, context, action, tid, payload, retain=False):
+        """Add message to outgoing queue"""
+        # Publishing always uses shared=False (regular topics)
+        topic = self.protocol.generate_topic(job, task, context, tid, action, shared=False)
+        self.__outgoing.append({
+            'topic': topic, 
+            'payload': payload, 
+            'retain': retain
+        })
+    
+    async def __send_immediate(self, job, workgroup, task, context, action, tid, payload, retain=False):
+        """Send message immediately"""
+        if self.__connected:
+            try:
+                # Publishing always uses shared=False (regular topics)
+                topic = self.protocol.generate_topic(job, task, context, tid, action, shared=False)
+                
+                # Parse payload to create AetherMessage
+                payload_data = json.loads(payload)
+                message = AetherMessage.from_dict(payload_data)
+                
+                await self.protocol.publish(topic, message, retain)
+                await asyncio.sleep(0.001)  # Brief yield
+                
+            except Exception as e:
+                print(f"Immediate send failed: {e}")
+                self.__connected = False
+                await self.__send_to_queue(job, workgroup, task, context, action, tid, payload, retain)
+        else:
+            await self.__send_to_queue(job, workgroup, task, context, action, tid, payload, retain)
+    
+    async def __send(self, job, workgroup, task, context, action, tid, payload, retain=False, immediate=False):
+        """Send message either immediately or to queue"""
+        if immediate:
+            await self.__send_immediate(job, workgroup, task, context, action, tid, payload, retain=retain)
+        else:
+            await self.__send_to_queue(job, workgroup, task, context, action, tid, payload, retain=retain)
+    
+    # Public API methods (same as original)
+    async def idle(self, job, workgroup, task, context, tid, data, on_handle, immediate=False):
+        if on_handle is not None:
+            await self.subscribe(job, workgroup, task, context, tid, 'perform', on_handle)
+        payload = self.__data_to_payload('idle', 'online', 100, data)
+        await self.__send(job, workgroup, task, context, 'idle', tid, payload, retain=False, immediate=immediate)
+    
+    async def perform(self, job, workgroup, task, context, tid, data, on_handle, immediate=False):
+        if on_handle is not None:
+            await self.subscribe(job, workgroup, task, context, tid, 'status', on_handle)
+            await self.subscribe(job, workgroup, task, context, tid, 'complete', on_handle)
+        payload = self.__data_to_payload('perform', 'initialized', 0, data)
+        await self.__send(job, workgroup, task, context, 'perform', tid, payload, retain=False, immediate=immediate)
+    
+    async def complete(self, job, workgroup, task, context, tid, data, on_handle, success=True, immediate=False):
+        result = 'succeed' if success else 'failed'
+        payload = self.__data_to_payload('complete', result, 100, data)
+        await self.__send(job, workgroup, task, context, 'complete', tid, payload, retain=False, immediate=immediate)
+    
+    async def status(self, job, workgroup, task, context, tid, data, on_handle, progress=0, immediate=False):
+        payload = self.__data_to_payload('status', 'progress', progress, data)
+        await self.__send(job, workgroup, task, context, 'status', tid, payload, retain=False, immediate=immediate)
+    
+    async def dismiss(self, job, workgroup, task, context, tid, data, on_handle, immediate=False):
+        if on_handle is not None:
+            await self.unsubscribe(job, workgroup, task, context, tid, 'complete', on_handle)
+        payload = self.__data_to_payload('dismiss', 'dismissed', 100, data)
+        await self.__send(job, workgroup, task, context, 'dismiss', tid, payload, retain=False, immediate=immediate)
+    
+    async def online(self, job, workgroup, task, context, tid, data, on_handle):
+        payload = self.__data_to_payload('online', 'connected', 100, data)
+        await self.__send(job, workgroup, task, context, 'online', tid, payload, retain=False)
+    
+    async def subscribe(self, job, workgroup, task, context, tid, action, handler_func):
+        if handler_func is not None:
+            self.__listeners.append({
+                'job': job,
+                'workgroup': workgroup, 
+                'task': task,
+                'context': context,
+                'tid': tid,
+                'action': action,
+                'state': SUBSTATE.TO_SUBSCRIBE,
+                'handler': handler_func
+            })
+    
+    async def unsubscribe(self, job, workgroup, task, context, tid, action, handler_func):
+        for listener in self.__listeners:
+            if (listener['job'] == job and 
+                listener['task'] == task and 
+                listener['context'] == context and 
+                listener['action'] == action and 
+                listener['handler'] == handler_func):
+                listener['state'] = SUBSTATE.TO_UNSUBSCRIBE
+    
+    # New methods for load balancing support
+    async def perform_task(self, job: str, task: str, context: str, data: dict, 
+                          shared: bool = False, immediate: bool = False):
+        """Perform task with optional load balancing"""
+        tid = f"task_{id(data)}"
+        payload = self.__data_to_payload('perform', 'initialized', 0, data)
+        
+        if shared:
+            # Use shared subscription approach for load balancing
+            await self.__send_shared(job, task, context, 'perform', tid, payload, retain=False, immediate=immediate)
+        else:
+            await self.__send(job, "default", task, context, 'perform', tid, payload, retain=False, immediate=immediate)
+    
+    async def add_task(self, job: str, task: str, context: str, callback, shared: bool = False):
+        """Add task handler with optional load balancing"""
+        if shared:
+            # Subscribe to shared topic for load balancing
+            await self.subscribe_shared(job, task, context, 'perform', callback)
+        else:
+            tid = f"worker_{id(self)}"
+            await self.subscribe(job, "default", task, context, tid, 'perform', callback)
+    
+    async def __send_shared(self, job: str, task: str, context: str, action: str, 
+                           tid: str, payload: dict, retain: bool = False, immediate: bool = False):
+        """Send message using shared subscription for load balancing"""
+        topic = self.protocol.generate_topic(job, task, context, tid, action, shared=True)
+        message = AetherMessage(
+            action=action,
+            data=payload,
+            source=self.client_id
+        )
+        
+        if immediate or self.__connected:
+            await self.protocol.publish(topic, message, retain=retain)
+        else:
+            # Queue for later sending when connected
+            self.__outgoing.append({
+                'topic': topic,
+                'message': message,
+                'retain': retain
+            })
+    
+    async def subscribe_shared(self, job: str, task: str, context: str, action: str, callback):
+        """Subscribe using shared subscription for load balancing"""
+        # Add listener for shared subscription
+        self.__listeners.append({
+            'job': job,
+            'workgroup': "shared",  # Use shared workgroup for load balancing
+            'task': task,
+            'context': context,
+            'tid': "",  # Empty tid for shared subscriptions
+            'action': action,
+            'handler': callback,
+            'state': SUBSTATE.TO_SUBSCRIBE
+        })
+        
+        # Subscribe to shared topic
+        topic = self.protocol.generate_topic(job, task, context, "", action, shared=True)
+        return await self.protocol.subscribe(topic, callback)
+
+
+class AetherMagic(MultiProtocolAetherMagic):
+    """
+    Main AetherMagic class with full backward compatibility
+    Supports both old MQTT-only initialization and new multi-protocol initialization
+    """
+    
+    def __init__(self, server=None, port=None, ssl=None, user=None, password=None, union=None, 
+                 protocol_type=None, host=None, **kwargs):
+        
+        # Old initialization style (MQTT only) - highest priority
+        if server is not None:
+            super().__init__(
+                protocol_type=ProtocolType.MQTT,
+                host=server,
+                port=port or 1883,
+                ssl=ssl or False,
+                username=user or '',
+                password=password or '',
+                union=union or 'default',
+                **kwargs
+            )
+        
+        # New initialization style (multi-protocol)
+        elif protocol_type is not None:
+            super().__init__(
+                protocol_type=protocol_type,
+                host=host or 'localhost',
+                port=port or (1883 if protocol_type == ProtocolType.MQTT else 6379),
+                ssl=ssl or False,
+                username=user or '',
+                password=password or '',
+                union=union or 'default',
+                **kwargs
+            )
+        
+        # Default to MQTT for full backward compatibility
+        else:
+            super().__init__(
+                protocol_type=ProtocolType.MQTT,
+                host=host or 'localhost',
+                port=port or 1883,
+                ssl=ssl or False,
+                username=user or '',
+                password=password or '',
+                union=union or 'default',
+                **kwargs
+            )

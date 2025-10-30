@@ -1,5 +1,19 @@
+# MQTT support (original)
 asyncio-mqtt==0.16.2
 asgiref==3.8.1
 paho-mqtt==2.1.0
 aiomqtt @ git+https://github.com/sbtinstruments/asyncio-mqtt@8eaff6b01445f65060301d0a2aea2de669e69887
 certifi
+
+# Redis support
+redis>=4.0.0
+
+# HTTP/WebSocket support  
+aiohttp>=3.8.0
+websockets>=10.0
+
+# ZeroMQ support
+pyzmq>=24.0.0
+
+# Optional: RabbitMQ support
+# aio-pika>=8.0.0

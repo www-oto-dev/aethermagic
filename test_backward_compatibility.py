@@ -38,17 +38,16 @@ async def test_backward_compatibility():
     print(f"  Expected: {expected_publish}")
     print(f"  Match: {publish_topic == expected_publish}")
     
-    # Test SUBSCRIPTION: shared=True adds $share prefix for load balancing
+    # Test SUBSCRIPTION: same format as publishing - NO shared prefixes!
     subscribe_topic = protocol.generate_topic(
-        job="engine",
-        task="generate-website-content", 
+        job="chatbot",
+        task="ask", 
         context="x",
-        tid="78f9a888",
-        action="perform",
-        shared=True  # Subscription uses shared topics for load balancing
+        tid="722fd192",
+        action="perform"
     )
     
-    expected_subscribe = "$share/test_engine_generate-website-content/test/engine/generate-website-content/x/78f9a888/perform"
+    expected_subscribe = "test/chatbot/ask/x/722fd192/perform"
     print(f"✓ Subscription topic (shared): {subscribe_topic}")
     print(f"  Expected: {expected_subscribe}")
     print(f"  Match: {subscribe_topic == expected_subscribe}")

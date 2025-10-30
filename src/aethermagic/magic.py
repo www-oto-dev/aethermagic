@@ -298,15 +298,17 @@ class MultiProtocolAetherMagic:
     
     def __topic_for_listener(self, listener) -> str:
         """Generate topic string for a listener"""
-        shared = (listener['action'] == 'perform' and self.__share_tasks)
+        # For subscription, use wildcard '+' for perform actions to catch any tid
+        tid_for_subscription = '+' if listener['action'] == 'perform' else listener['tid']
         
         return self.protocol.generate_topic(
             listener['job'],
             listener['task'], 
             listener['context'],
-            listener['tid'],
+            tid_for_subscription,  # Use '+' for perform subscriptions
             listener['action'],
-            shared
+            shared=False,  # NO shared subscriptions - just regular MQTT
+            workgroup=listener['workgroup']
         )
     
     def __data_to_fulldata(self, action, status, progress, data):
@@ -407,8 +409,7 @@ class MultiProtocolAetherMagic:
     
     async def __send_to_queue(self, job, workgroup, task, context, action, tid, payload, retain=False):
         """Add message to outgoing queue"""
-        # Publishing always uses shared=False (regular topics)
-        topic = self.protocol.generate_topic(job, task, context, tid, action, shared=False)
+        topic = self.protocol.generate_topic(job, task, context, tid, action)
         self.__outgoing.append({
             'topic': topic, 
             'payload': payload, 
@@ -419,8 +420,7 @@ class MultiProtocolAetherMagic:
         """Send message immediately"""
         if self.__connected:
             try:
-                # Publishing always uses shared=False (regular topics)
-                topic = self.protocol.generate_topic(job, task, context, tid, action, shared=False)
+                topic = self.protocol.generate_topic(job, task, context, tid, action)
                 
                 # Parse payload to create AetherMessage
                 payload_data = json.loads(payload)

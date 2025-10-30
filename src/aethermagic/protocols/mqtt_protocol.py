@@ -143,23 +143,25 @@ class MQTTProtocol(ProtocolInterface):
         
         return messages
     
-    def generate_topic(self, job: str, task: str, context: str, tid: str, action: str, shared: bool = False) -> str:
-        """Generate MQTT topic - shared parameter only affects subscription, not publishing"""
+    def generate_topic(self, job: str, task: str, context: str, tid: str, action: str, shared: bool = False, workgroup: str = "") -> str:
+        """Generate MQTT topic - RESTORE original working format"""
         
-        # MQTT shared subscriptions work like this:
-        # Publisher sends to:     "union/job/task/context/tid/action"  
-        # Subscribers listen to: "$share/group/union/job/task/context/tid/action"
+        # Your working format with shared subscriptions:
+        # Publish: union/job/task/context/tid/action  
+        # Subscribe: $share/union_job_workgroup/union/job/task/context/tid/action
         
-        # Generate base topic (same for both publishing and subscribing)
-        topic = f'{self.config.union}/{job}/{task}/{context}/{tid}'
+        base_topic = f'{self.config.union}/{job}/{task}/{context}/{tid}'
         
         if self.action_in_topic:
-            topic = f'{topic}/{action}'
+            base_topic = f'{base_topic}/{action}'
         
-        # For shared subscriptions, add $share prefix ONLY for subscription
+        # For shared subscriptions (load balancing) - ONLY for subscription!
         if shared and action == 'perform' and self.share_tasks:
-            shared_prefix = f'$share/{self.config.union}_{job}_{task}'
-            topic = f'{shared_prefix}/{topic}'
+            # Use workgroup in shared group name like in your logs
+            shared_group = f'{self.config.union}_{job}_{workgroup}'
+            topic = f'$share/{shared_group}/{base_topic}'
+        else:
+            topic = base_topic
         
         return topic
     

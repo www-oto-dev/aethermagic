@@ -154,7 +154,7 @@ class MQTTProtocol(ProtocolInterface):
         
         # For shared subscriptions (load balancing for perform actions)
         if shared and action == 'perform' and self.share_tasks and workgroup:
-            # Format from your logs: $share/lisboa-2025.release_illusion_workgroup/lisboa-2025.release/illusion/redownload-images/x/+/perform
+            # Example format: $share/union_job_workgroup/union/job/task/context/+/perform
             shared_group = f'{self.config.union}_{job}_{workgroup}'
             topic = f'$share/{shared_group}/{base_topic}'
         else:
@@ -185,12 +185,14 @@ class MQTTProtocol(ProtocolInterface):
 
 
 class MQTTBrokerEmulator:
-    """Simple MQTT broker emulator for testing"""
+    """MQTT broker emulator with proper shared subscription support"""
     
     def __init__(self, port: int = 1883):
         self.port = port
         self.clients: Dict[str, Dict] = {}
-        self.subscriptions: Dict[str, List] = {}
+        self.subscriptions: Dict[str, List] = {}  # Regular subscriptions: topic -> [client_ids]
+        self.shared_subscriptions: Dict[str, Dict] = {}  # Shared subscriptions: group -> {topic: [client_ids]}
+        self.shared_round_robin: Dict[str, int] = {}  # Round robin counters: topic -> index
         self.running = False
     
     async def start(self):
@@ -219,32 +221,82 @@ class MQTTBrokerEmulator:
             del self.clients[client_id]
     
     def subscribe_client(self, client_id: str, topic: str):
-        """Subscribe client to topic"""
-        if topic not in self.subscriptions:
-            self.subscriptions[topic] = []
-        
-        if client_id not in self.subscriptions[topic]:
-            self.subscriptions[topic].append(client_id)
+        """Subscribe client to topic (handles both regular and shared subscriptions)"""
+        if topic.startswith('$share/'):
+            # Shared subscription: $share/group/actual_topic
+            parts = topic[7:].split('/', 1)  # Remove $share/
+            if len(parts) >= 2:
+                group = parts[0]
+                actual_topic = parts[1]
+                
+                if group not in self.shared_subscriptions:
+                    self.shared_subscriptions[group] = {}
+                
+                if actual_topic not in self.shared_subscriptions[group]:
+                    self.shared_subscriptions[group][actual_topic] = []
+                
+                if client_id not in self.shared_subscriptions[group][actual_topic]:
+                    self.shared_subscriptions[group][actual_topic].append(client_id)
+                    print(f"MQTT Broker: Added {client_id} to shared group '{group}' for topic '{actual_topic}'")
+        else:
+            # Regular subscription
+            if topic not in self.subscriptions:
+                self.subscriptions[topic] = []
+            
+            if client_id not in self.subscriptions[topic]:
+                self.subscriptions[topic].append(client_id)
     
     def unsubscribe_client(self, client_id: str, topic: str):
-        """Unsubscribe client from topic"""
-        if topic in self.subscriptions and client_id in self.subscriptions[topic]:
-            self.subscriptions[topic].remove(client_id)
+        """Unsubscribe client from topic (handles both regular and shared subscriptions)"""
+        if topic.startswith('$share/'):
+            # Shared subscription: $share/group/actual_topic
+            parts = topic[7:].split('/', 1)  # Remove $share/
+            if len(parts) >= 2:
+                group = parts[0]
+                actual_topic = parts[1]
+                
+                if (group in self.shared_subscriptions and 
+                    actual_topic in self.shared_subscriptions[group] and
+                    client_id in self.shared_subscriptions[group][actual_topic]):
+                    self.shared_subscriptions[group][actual_topic].remove(client_id)
+        else:
+            # Regular subscription
+            if topic in self.subscriptions and client_id in self.subscriptions[topic]:
+                self.subscriptions[topic].remove(client_id)
     
     async def publish_message(self, topic: str, payload: str, retain: bool = False):
-        """Publish message to subscribers"""
-        # Find matching subscribers
+        """Publish message to subscribers (with proper shared subscription load balancing)"""
         subscribers = []
         
+        # Check regular subscriptions first
         for sub_topic, clients in self.subscriptions.items():
             if self._topic_matches(topic, sub_topic):
                 subscribers.extend(clients)
+        
+        # Check shared subscriptions - only send to ONE client per group
+        for group, group_subscriptions in self.shared_subscriptions.items():
+            for shared_topic, clients in group_subscriptions.items():
+                if self._topic_matches(topic, shared_topic) and clients:
+                    # Load balance: pick next client in round-robin fashion
+                    key = f"{group}:{shared_topic}"
+                    if key not in self.shared_round_robin:
+                        self.shared_round_robin[key] = 0
+                    
+                    # Get the next client
+                    client_index = self.shared_round_robin[key] % len(clients)
+                    selected_client = clients[client_index]
+                    subscribers.append(selected_client)
+                    
+                    # Update round robin counter
+                    self.shared_round_robin[key] = (self.shared_round_robin[key] + 1) % len(clients)
+                    
+                    print(f"MQTT Broker: Load balancing to {selected_client} (group: {group}, {client_index + 1}/{len(clients)})")
         
         # Route message to subscribers
         for client_id in subscribers:
             if client_id in self.clients:
                 # In real implementation, would send to actual client
-                print(f"Routing message to {client_id}: {topic} -> {payload[:50]}...")
+                print(f"MQTT Broker: Routing message to {client_id}: {topic} -> {payload[:50]}...")
     
     def _topic_matches(self, published_topic: str, subscription_topic: str) -> bool:
         """Check if published topic matches subscription pattern"""

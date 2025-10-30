@@ -1,2 +1,36 @@
+include README.md
+include LICENSE
+include requirements.txt
+include TASK_DISTRIBUTION.md
+
+# Include only core source files
+recursive-include src/aethermagic *.py
+include src/aethermagic/__init__.py
+
+# Exclude ALL demo, test, and debug files
+global-exclude test_*.py
+global-exclude debug_*.py
+global-exclude demo*.py
+global-exclude load_balanced_demo.py
+global-exclude quick_*.py
+global-exclude examples.py
+global-exclude django_*.py
+global-exclude repeater.py
+global-exclude *.service
+global-exclude build.sh
+global-exclude .buildignore
+
+# Exclude documentation not needed for users
+global-exclude README_OLD.md
+global-exclude CHANGELOG.md
+global-exclude TRANSLATION_SUMMARY.md
+global-exclude ARCHITECTURE_UNIFICATION.md  
+global-exclude LOAD_BALANCING_IMPLEMENTATION.md
+
+# Exclude development files
 exclude venv/*
 prune venv
+exclude .venv/*
+prune .venv
+exclude __pycache__
+prune __pycache__

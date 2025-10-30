@@ -134,6 +134,9 @@ class MultiProtocolAetherMagic:
         self.__share_tasks = True
         self.__action_in_topic = True
         self.__connected = False
+        self.__should_stop = False  # Flag to stop main loop
+        self.__temp_unsubscribed_shared = []  # Track temporarily unsubscribed shared topics
+        self.__processed_tasks = set()  # Track processed task IDs to prevent duplicates
         
         # Share instance with thread
         self.__share_instance(self)
@@ -163,7 +166,7 @@ class MultiProtocolAetherMagic:
         """Main connection and message processing loop"""
         failed_connection_interval = 10
         
-        while True:
+        while not self.__should_stop:
             just_connected = True
             
             try:
@@ -175,7 +178,7 @@ class MultiProtocolAetherMagic:
                 print(f"{self.config.protocol_type.value.upper()}: Connected")
                 self.__connected = True
                 
-                while self.__connected:
+                while self.__connected and not self.__should_stop:
                     # Send online status if just connected
                     if just_connected:
                         await self.online("system", "", "online", self.__hostname, self.__identifier, {}, None)
@@ -198,11 +201,8 @@ class MultiProtocolAetherMagic:
                     
                     # Process incoming messages
                     if len(self.__incoming) > 0:
-                        has_perform = await self.__detect_perform()
-                        
-                        if has_perform:
-                            await self.__unsubscribe_shared_subscriptions()
-                        
+                        # Process messages without unsubscribing
+                        # Use message deduplication instead
                         await self.__process_incoming()
                     
                     # Brief sleep
@@ -212,6 +212,23 @@ class MultiProtocolAetherMagic:
                 print(f"{self.config.protocol_type.value.upper()}: Connection lost - {e}")
                 self.__connected = False
                 await asyncio.sleep(failed_connection_interval)
+        
+        # Clean shutdown
+        if self.__connected:
+            await self.protocol.disconnect()
+            print(f"{self.config.protocol_type.value.upper()}: Disconnected")
+    
+    async def stop(self):
+        """Stop the main loop gracefully"""
+        print(f"{self.config.protocol_type.value.upper()}: Stopping...")
+        self.__should_stop = True
+        self.__connected = False
+    
+    async def disconnect(self):
+        """Disconnect from protocol service"""
+        if self.__connected:
+            await self.protocol.disconnect()
+            self.__connected = False
     
     async def __subscribe_required_listeners(self):
         """Subscribe to topics for all listeners that need it"""
@@ -249,9 +266,31 @@ class MultiProtocolAetherMagic:
     
     async def __unsubscribe_shared_subscriptions(self):
         """Unsubscribe from shared subscriptions temporarily"""
-        for topic in self.__subscribed:
+        if not hasattr(self, '__temp_unsubscribed_shared'):
+            self.__temp_unsubscribed_shared = []
+        
+        # Clear previous list
+        self.__temp_unsubscribed_shared = []
+        
+        for topic in list(self.__subscribed):  # Use list() to avoid modification during iteration
             if topic.startswith('$share/') or 'shared.' in topic:
                 await self.protocol.unsubscribe(topic)
+                self.__temp_unsubscribed_shared.append(topic)
+                self.__subscribed.remove(topic)
+                print(f"MQTT: Temporarily unsubscribed from {topic} (saved for re-subscription)")
+    
+    async def __resubscribe_shared_subscriptions(self):
+        """Re-subscribe to shared subscriptions after processing"""
+        if hasattr(self, '__temp_unsubscribed_shared') and self.__temp_unsubscribed_shared:
+            print(f"MQTT: Re-subscribing to {len(self.__temp_unsubscribed_shared)} shared subscriptions")
+            for topic in self.__temp_unsubscribed_shared:
+                await self.protocol.subscribe(topic)
+                self.__subscribed.append(topic)
+                print(f"MQTT: Re-subscribed to {topic}")
+            
+            self.__temp_unsubscribed_shared = []
+        else:
+            print(f"MQTT: No temp unsubscribed list found (hasattr: {hasattr(self, '__temp_unsubscribed_shared')}, list: {getattr(self, '__temp_unsubscribed_shared', 'N/A')})")
     
     async def __receive_incoming(self) -> bool:
         """Receive incoming messages from protocol"""
@@ -265,10 +304,12 @@ class MultiProtocolAetherMagic:
                 payload = msg['payload']
                 
                 if topic and payload:
+                    
                     print(f"{self.config.protocol_type.value.upper()}: Received {topic}")
                     
                     incoming = {'topic': topic, 'payload': payload}
                     self.__incoming.append(incoming)
+                    print(f"{self.config.protocol_type.value.upper()}: Added to incoming queue (total: {len(self.__incoming)})")
                     has_new_incoming = True
         
         except Exception as e:
@@ -300,6 +341,12 @@ class MultiProtocolAetherMagic:
         """Generate topic string for a listener - restore original shared subscription logic"""
         # For subscription, use wildcard '+' for perform actions to catch any tid
         tid_for_subscription = '+' if listener['action'] == 'perform' else listener['tid']
+        
+        # IMPORTANT: Also update the listener's TID to wildcard for perform actions
+        # This ensures proper matching in __for_message_fits_listener
+        if listener['action'] == 'perform' and listener['tid'] not in ['+', '']:
+            print(f"MQTT: Converting listener TID from {listener['tid']} to + for perform action")
+            listener['tid'] = '+'
         
         # Use shared subscriptions for perform actions (task distribution)
         use_shared = listener['action'] == 'perform' and self.__share_tasks
@@ -371,10 +418,13 @@ class MultiProtocolAetherMagic:
     
     async def __reply_incoming_immediate(self):
         """Send immediate replies for certain message types"""
+        print(f"MQTT: __reply_incoming_immediate called with {len(self.__incoming)} messages")
+        
         async def reply(incoming, listener):
             topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts(incoming)
             
             if action == 'perform':
+                print(f"MQTT: Processing new task {tid}")
                 # Send progress 0 to acknowledge task receipt
                 await self.status(job, "", task, context, tid, {}, None, 0, immediate=False)
         
@@ -382,13 +432,30 @@ class MultiProtocolAetherMagic:
             await self.__for_message_fits_listener(incoming, reply)
     
     async def __process_incoming(self):
-        """Process all incoming messages"""
+        """Process all incoming messages with deduplication"""
+        print(f"MQTT: __process_incoming called with {len(self.__incoming)} messages")
+        
         async def handle(incoming, listener):
             topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts(incoming)
             
+            # Deduplicate perform actions by task ID
+            if action == 'perform':
+                task_key = f"{job}:{task}:{context}:{tid}"
+                if task_key in self.__processed_tasks:
+                    print(f"MQTT: Skipping duplicate task {tid} (already processed)")
+                    return
+                else:
+                    self.__processed_tasks.add(task_key)
+                    print(f"MQTT: Calling handler for task {tid}")
+            
             handler = listener['handler']
             if handler is not None:
-                await handler(action, tid, data, fulldata)
+                # Check if handler is async function
+                if asyncio.iscoroutinefunction(handler):
+                    await handler(action, tid, data, fulldata)
+                else:
+                    # Call regular function directly
+                    handler(action, tid, data, fulldata)
         
         for incoming in self.__incoming:
             await self.__for_message_fits_listener(incoming, handle)
@@ -399,16 +466,32 @@ class MultiProtocolAetherMagic:
         """Check if incoming message fits any listener and call callback"""
         topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts(incoming)
         
+        print(f"MQTT: Parsing message - union:{union}, job:{job}, task:{task}, context:{context}, tid:{tid}, action:{action}")
+        print(f"MQTT: Config union: {self.config.union}")
+        print(f"MQTT: Available listeners: {len(self.__listeners)}")
+        
         if task and action and union == self.config.union:
-            for listener in self.__listeners:
+            for i, listener in enumerate(self.__listeners):
+                print(f"MQTT: Listener {i}: job:{listener['job']}, task:{listener['task']}, context:{listener['context']}, action:{listener['action']}, tid:{listener['tid']}")
+                
                 if listener['state'] != SUBSTATE.TO_UNSUBSCRIBE:
                     if (listener['job'] == job and 
                         listener['task'] == task and 
                         listener['context'] == context and 
                         listener['action'] == action):
                         
-                        if tid == listener['tid'] or action == 'perform':
+                        # Check TID matching: exact match OR wildcard ('+') OR empty string (legacy wildcard)
+                        if tid == listener['tid'] or listener['tid'] == '+' or listener['tid'] == '':
+                            print(f"MQTT: ✅ MATCH FOUND! Calling callback for listener {i}")
                             await callback(incoming, listener)
+                        else:
+                            print(f"MQTT: ❌ TID mismatch: message:{tid} vs listener:{listener['tid']}")
+                    else:
+                        print(f"MQTT: ❌ No match for listener {i}")
+                else:
+                    print(f"MQTT: ❌ Listener {i} marked for unsubscribe")
+        else:
+            print(f"MQTT: ❌ Basic filter failed - task:{bool(task)}, action:{bool(action)}, union_match:{union == self.config.union}")
     
     async def __send_to_queue(self, job, workgroup, task, context, action, tid, payload, retain=False):
         """Add message to outgoing queue"""
@@ -551,7 +634,7 @@ class MultiProtocolAetherMagic:
             'workgroup': "shared",  # Use shared workgroup for load balancing
             'task': task,
             'context': context,
-            'tid': "",  # Empty tid for shared subscriptions
+            'tid': "+",  # Use wildcard for shared subscriptions to match any tid
             'action': action,
             'handler': callback,
             'state': SUBSTATE.TO_SUBSCRIBE

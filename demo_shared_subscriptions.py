@@ -13,8 +13,8 @@ def demo_topic_generation():
     print("=== MQTT Topic Generation Demo ===")
     print()
     
-    # Configuration matching your logs
-    config = ConnectionConfig(ProtocolType.MQTT, 'lisboa-2025.release', 1883, union='lisboa-2025.release')
+    # Example configuration
+    config = ConnectionConfig(ProtocolType.MQTT, 'example-host', 1883, union='production-cluster')
     protocol = MQTTProtocol(config)
     
     print("Configuration:")
@@ -62,12 +62,12 @@ def demo_topic_generation():
     print("=== How Shared Subscriptions Work ===")
     print()
     print("1. Publisher sends tasks to specific topics:")
-    print("   lisboa-2025.release/illusion/redownload-images/x/a2de67ca/perform")
-    print("   lisboa-2025.release/illusion/redownload-images/x/b3ef78db/perform")
-    print("   lisboa-2025.release/illusion/redownload-images/x/c4f089ec/perform")
+    print("   production-cluster/image-process/resize/batch1/a2de67ca/perform")
+    print("   production-cluster/image-process/resize/batch1/b3ef78db/perform")
+    print("   production-cluster/image-process/resize/batch1/c4f089ec/perform")
     print()
     print("2. Multiple workers subscribe to shared topic:")
-    print("   $share/lisboa-2025.release_illusion_workgroup/lisboa-2025.release/illusion/redownload-images/x/+/perform")
+    print("   $share/production-cluster_image-process_workgroup/production-cluster/image-process/resize/batch1/+/perform")
     print()
     print("3. MQTT broker distributes each task to only ONE worker in the shared group")
     print("   - Worker A gets task a2de67ca")

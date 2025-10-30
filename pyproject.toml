@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aethermagic"
-version = "0.1.13"
+version = "0.1.22"
 authors = [
   { name="Michael Galizki", email="michael@galizki.com" },
 ]

@@ -1,0 +1,28 @@
+# config.yaml example
+aether_services:
+  mqtt:
+    protocol_type: mqtt
+    connection:
+      host: mqtt.example.com
+      port: 1883
+      ssl: false
+      username: service_user
+      password: secret_password
+    settings:
+      union: production
+      channel: mqtt
+      keepalive: 60
+
+  redis:
+    protocol_type: redis
+    connection:
+      host: redis.example.com
+      port: 6379
+      ssl: true
+      username: ""
+      password: redis_secret
+    settings:
+      union: production
+      channel: redis
+      use_streams: true
+      consumer_group: microservice_workers

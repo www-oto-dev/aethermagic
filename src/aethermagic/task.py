@@ -11,14 +11,16 @@ from .magic import AetherMagic
 
 class AetherTask():
 
-    def __init__(self, job, task, context="x", on_perform=None, on_status=None, on_complete=None, on_cancel=None):
+    def __init__(self, job, task, context="x", on_perform=None, on_status=None, on_complete=None, on_cancel=None, channel: str = ""):
 
-        self.__instance = AetherMagic.shared()
+        # Request the shared AetherMagic instance for this thread and channel
+        self.__instance = AetherMagic.shared(channel=channel)
         self.__job = job
         self.__workgroup = 'workgroup'
         self.__task = task
         self.__context = context
         self.__tid = str(uuid1())[:8]
+        self.__channel = channel
 
         self.__on_perform_func = on_perform
         self.__on_status_func = on_status
@@ -39,7 +41,8 @@ class AetherTask():
             on_perform=self.__on_perform_func,
             on_status=self.__on_status_func,
             on_complete=self.__on_complete_func,
-            on_cancel=self.__on_cancel_func
+            on_cancel=self.__on_cancel_func,
+            channel=self.__channel
         )
 
         # Copying tid (or setting new)

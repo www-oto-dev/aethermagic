@@ -75,6 +75,7 @@ class ConnectionConfig:
     username: str = ""
     password: str = ""
     union: str = "default"
+    channel: str = ""
     timeout: int = 10
     keepalive: int = 60
     extra_params: Dict[str, Any] = None

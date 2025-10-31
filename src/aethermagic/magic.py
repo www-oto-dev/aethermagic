@@ -75,6 +75,7 @@ class MultiProtocolAetherMagic:
                  username: str = '',
                  password: str = '',
                  union: str = 'default',
+                 channel: str = '',
                  # Backward compatibility parameters
                  server: str = None,
                  user: str = None,
@@ -122,6 +123,7 @@ class MultiProtocolAetherMagic:
             username=username,
             password=password,
             union=union,
+            channel=channel,
             extra_params=kwargs
         )
         
@@ -138,28 +140,52 @@ class MultiProtocolAetherMagic:
         self.__temp_unsubscribed_shared = []  # Track temporarily unsubscribed shared topics
         self.__processed_tasks = set()  # Track processed task IDs to prevent duplicates
         
-        # Share instance with thread
+        # Share instance with thread and optional channel
         self.__share_instance(self)
     
     def __share_instance(self, instance):
+        """Store shared instance keyed by (threadid, channel).
+
+        We key by tuple (threadid, channel) so a single thread can host
+        multiple AetherMagic instances differentiated by channel.
+        For backward compatibility, an instance with empty channel will
+        also be stored under the raw thread id key.
+        """
         global shared_instances, shared_instances_lock
-        
+
         with shared_instances_lock:
             threadid = threading.get_ident()
-            if instance is not None:
-                shared_instances[threadid] = instance
+            channel = ''
+            if instance is not None and hasattr(instance, 'config'):
+                channel = getattr(instance.config, 'channel', '') or ''
+
+            # Store under composite key
+            shared_instances[(threadid, channel)] = instance
+            
+            # Always store under raw thread id for backward compatibility
+            # This allows AetherTask without channel to work even if AetherMagic has a channel
+            shared_instances[threadid] = instance
     
     @staticmethod
-    def shared():
-        """Get shared instance for current thread"""
+    def shared(channel: str = ''):
+        """Get shared instance for current thread and optional channel.
+
+        If channel is provided, this looks up the instance stored under
+        (threadid, channel). If not found and channel is empty it falls
+        back to the legacy thread-only key for backward compatibility.
+        """
         instance = None
         global shared_instances, shared_instances_lock
-        
+
         with shared_instances_lock:
             threadid = threading.get_ident()
-            if threadid in shared_instances:
+            key = (threadid, channel or '')
+            if key in shared_instances:
+                instance = shared_instances[key]
+            elif channel == '' and threadid in shared_instances:
+                # Legacy fallback
                 instance = shared_instances[threadid]
-        
+
         return instance
     
     async def main(self):
@@ -309,7 +335,6 @@ class MultiProtocolAetherMagic:
                     
                     incoming = {'topic': topic, 'payload': payload}
                     self.__incoming.append(incoming)
-                    print(f"{self.config.protocol_type.value.upper()}: Added to incoming queue (total: {len(self.__incoming)})")
                     has_new_incoming = True
         
         except Exception as e:
@@ -418,13 +443,10 @@ class MultiProtocolAetherMagic:
     
     async def __reply_incoming_immediate(self):
         """Send immediate replies for certain message types"""
-        print(f"MQTT: __reply_incoming_immediate called with {len(self.__incoming)} messages")
-        
         async def reply(incoming, listener):
             topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts(incoming)
             
             if action == 'perform':
-                print(f"MQTT: Processing new task {tid}")
                 # Send progress 0 to acknowledge task receipt
                 await self.status(job, "", task, context, tid, {}, None, 0, immediate=False)
         
@@ -433,8 +455,6 @@ class MultiProtocolAetherMagic:
     
     async def __process_incoming(self):
         """Process all incoming messages with deduplication"""
-        print(f"MQTT: __process_incoming called with {len(self.__incoming)} messages")
-        
         async def handle(incoming, listener):
             topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts(incoming)
             
@@ -442,11 +462,9 @@ class MultiProtocolAetherMagic:
             if action == 'perform':
                 task_key = f"{job}:{task}:{context}:{tid}"
                 if task_key in self.__processed_tasks:
-                    print(f"MQTT: Skipping duplicate task {tid} (already processed)")
                     return
                 else:
                     self.__processed_tasks.add(task_key)
-                    print(f"MQTT: Calling handler for task {tid}")
             
             handler = listener['handler']
             if handler is not None:
@@ -466,14 +484,8 @@ class MultiProtocolAetherMagic:
         """Check if incoming message fits any listener and call callback"""
         topic, payload, fulldata, data, union, job, task, context, tid, action = self.__incoming_parts(incoming)
         
-        print(f"MQTT: Parsing message - union:{union}, job:{job}, task:{task}, context:{context}, tid:{tid}, action:{action}")
-        print(f"MQTT: Config union: {self.config.union}")
-        print(f"MQTT: Available listeners: {len(self.__listeners)}")
-        
         if task and action and union == self.config.union:
-            for i, listener in enumerate(self.__listeners):
-                print(f"MQTT: Listener {i}: job:{listener['job']}, task:{listener['task']}, context:{listener['context']}, action:{listener['action']}, tid:{listener['tid']}")
-                
+            for listener in self.__listeners:
                 if listener['state'] != SUBSTATE.TO_UNSUBSCRIBE:
                     if (listener['job'] == job and 
                         listener['task'] == task and 
@@ -482,16 +494,7 @@ class MultiProtocolAetherMagic:
                         
                         # Check TID matching: exact match OR wildcard ('+') OR empty string (legacy wildcard)
                         if tid == listener['tid'] or listener['tid'] == '+' or listener['tid'] == '':
-                            print(f"MQTT: ✅ MATCH FOUND! Calling callback for listener {i}")
                             await callback(incoming, listener)
-                        else:
-                            print(f"MQTT: ❌ TID mismatch: message:{tid} vs listener:{listener['tid']}")
-                    else:
-                        print(f"MQTT: ❌ No match for listener {i}")
-                else:
-                    print(f"MQTT: ❌ Listener {i} marked for unsubscribe")
-        else:
-            print(f"MQTT: ❌ Basic filter failed - task:{bool(task)}, action:{bool(action)}, union_match:{union == self.config.union}")
     
     async def __send_to_queue(self, job, workgroup, task, context, action, tid, payload, retain=False):
         """Add message to outgoing queue"""
@@ -652,7 +655,7 @@ class AetherMagic(MultiProtocolAetherMagic):
     """
     
     def __init__(self, server=None, port=None, ssl=None, user=None, password=None, union=None, 
-                 protocol_type=None, host=None, **kwargs):
+                 protocol_type=None, host=None, channel=None, **kwargs):
         
         # Old initialization style (MQTT only) - highest priority
         if server is not None:
@@ -664,6 +667,7 @@ class AetherMagic(MultiProtocolAetherMagic):
                 username=user or '',
                 password=password or '',
                 union=union or 'default',
+                channel=channel or '',
                 **kwargs
             )
         
@@ -677,6 +681,7 @@ class AetherMagic(MultiProtocolAetherMagic):
                 username=user or '',
                 password=password or '',
                 union=union or 'default',
+                channel=channel or '',
                 **kwargs
             )
         
@@ -690,5 +695,6 @@ class AetherMagic(MultiProtocolAetherMagic):
                 username=user or '',
                 password=password or '',
                 union=union or 'default',
+                channel=channel or '',
                 **kwargs
             )

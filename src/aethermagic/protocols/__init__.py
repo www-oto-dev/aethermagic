@@ -125,10 +125,10 @@ class ProtocolInterface(ABC):
         """Receive pending messages"""
         pass
     
-    def generate_topic(self, job: str, task: str, context: str, tid: str, action: str, shared: bool = False) -> str:
+    def generate_topic(self, job: str, task: str, context: str, tid: str, action: str, shared: bool = False, workgroup: str = "") -> str:
         """Generate topic string based on parameters"""
         if shared:
-            shared_prefix = f"$share/{self.config.union}_{job}_{task}"
+            shared_prefix = f"$share/{self.config.union}_{job}_{workgroup or 'default'}"
             topic = f"{shared_prefix}/{self.config.union}/{job}/{task}/{context}/{tid}/{action}"
         else:
             topic = f"{self.config.union}/{job}/{task}/{context}/{tid}/{action}"

@@ -188,6 +188,6 @@ class RedisProtocol(ProtocolInterface):
             
         return messages
     
-    def generate_topic(self, job: str, task: str, context: str, tid: str, action: str, shared: bool = False) -> str:
+    def generate_topic(self, job: str, task: str, context: str, tid: str, action: str, shared: bool = False, workgroup: str = "") -> str:
         """Generate Redis channel name - use same format as MQTT for simplicity"""
         return f"{self.config.union}:{job}:{task}:{context}:{tid}:{action}"

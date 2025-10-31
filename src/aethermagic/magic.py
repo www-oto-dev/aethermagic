@@ -393,7 +393,8 @@ class MultiProtocolAetherMagic:
             listener['context'],
             tid_for_subscription,  # Use '+' for perform subscriptions
             listener['action'],
-            shared=use_shared  # Enable shared subscriptions for task distribution
+            shared=use_shared,  # Enable shared subscriptions for task distribution
+            workgroup=listener.get('workgroup', 'default')  # Add workgroup for shared subscriptions
         )
     
     def __data_to_fulldata(self, action, status, progress, data):
@@ -599,16 +600,16 @@ class MultiProtocolAetherMagic:
     
     # New methods for load balancing support
     async def perform_task(self, job: str, task: str, context: str, data: dict, 
-                          shared: bool = False, immediate: bool = False):
+                          shared: bool = False, workgroup: str = "default", immediate: bool = False):
         """Perform task with optional load balancing"""
         tid = f"task_{id(data)}"
         payload = self.__data_to_payload('perform', 'initialized', 0, data)
         
         if shared:
             # Use shared subscription approach for load balancing
-            await self.__send_shared(job, task, context, 'perform', tid, payload, retain=False, immediate=immediate)
+            await self.__send_shared(job, task, context, 'perform', tid, payload, workgroup=workgroup, retain=False, immediate=immediate)
         else:
-            await self.__send(job, "default", task, context, 'perform', tid, payload, retain=False, immediate=immediate)
+            await self.__send(job, workgroup, task, context, 'perform', tid, payload, retain=False, immediate=immediate)
     
     async def add_task(self, job: str, task: str, context: str, callback, shared: bool = False):
         """Add task handler with optional load balancing"""
@@ -620,13 +621,17 @@ class MultiProtocolAetherMagic:
             await self.subscribe(job, "default", task, context, tid, 'perform', callback)
     
     async def __send_shared(self, job: str, task: str, context: str, action: str, 
-                           tid: str, payload: dict, retain: bool = False, immediate: bool = False):
+                           tid: str, payload: dict, workgroup: str = "default", retain: bool = False, immediate: bool = False):
         """Send message using shared subscription for load balancing"""
-        topic = self.protocol.generate_topic(job, task, context, tid, action, shared=True)
+        # ОТПРАВКА ВСЕГДА В ОБЫЧНЫЙ ТОПИК! Shared работает только при подписке
+        topic = self.protocol.generate_topic(job, task, context, tid, action, shared=False)
         message = AetherMessage(
             action=action,
+            status='initialized',
+            progress=0,
             data=payload,
-            source=self.client_id
+            host=self.__hostname,
+            client=self.__identifier
         )
         
         if immediate or self.__connected:

@@ -315,11 +315,12 @@ class ZeroMQProtocol(ProtocolInterface):
             print(f"ZeroMQ: Request failed - {e}")
             return None
     
-    def generate_topic(self, job: str, task: str, context: str, tid: str, action: str, shared: bool = False) -> str:
+    def generate_topic(self, job: str, task: str, context: str, tid: str, action: str, shared: bool = False, workgroup: str = "") -> str:
         """Generate ZeroMQ topic"""
         if shared:
-            # For shared/load-balanced topics, use a simpler format
-            return f"shared.{self.config.union}.{job}.{task}.{action}"
+            # For shared/load-balanced topics, use workgroup in the topic
+            group = workgroup or "default"
+            return f"shared.{self.config.union}.{job}.{group}.{task}.{action}"
         else:
             return f"{self.config.union}.{job}.{task}.{context}.{tid}.{action}"
 

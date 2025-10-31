@@ -152,12 +152,14 @@ class MQTTProtocol(ProtocolInterface):
         if self.action_in_topic:
             base_topic = f'{base_topic}/{action}'
         
-        # For shared subscriptions (load balancing for perform actions)
-        if shared and action == 'perform' and self.share_tasks and workgroup:
-            # Example format: $share/union_job_workgroup/union/job/task/context/+/perform
+        # ВАЖНО: В MQTT shared subscription работает только для ПОДПИСКИ!
+        # Для отправки ВСЕГДА используем обычный топик
+        if shared and self.share_tasks and workgroup:
+            # Для подписки: $share/workgroup/обычный_топик
             shared_group = f'{self.config.union}_{job}_{workgroup}'
             topic = f'$share/{shared_group}/{base_topic}'
         else:
+            # Для отправки и обычных подписок: обычный топик
             topic = base_topic
         
         return topic

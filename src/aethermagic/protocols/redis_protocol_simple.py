@@ -54,18 +54,19 @@ class RedisProtocol(ProtocolInterface):
             self.publish_client = redis.Redis(**connection_params)
             self.subscribe_client = redis.Redis(**connection_params)
             
-            # Test connections (sync ping - ignore RuntimeWarning for now)
-            import warnings
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
+            # Test connections (ping is synchronous in this version)
+            try:
                 self.publish_client.ping()
                 self.subscribe_client.ping()
+            except:
+                # Try async version
+                await self.publish_client.ping()
+                await self.subscribe_client.ping()
             
             # Create pub/sub connection
             self.pubsub = self.subscribe_client.pubsub()
             
             self.connected = True
-            print(f"Redis: Connected (channel: {self.config.channel})")
             return True
             
         except Exception as e:
@@ -94,12 +95,13 @@ class RedisProtocol(ProtocolInterface):
             if not self.publish_client or not self.connected:
                 return False
                 
-            # Use pub/sub for all messages (sync version with warning suppression)  
-            import warnings
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", RuntimeWarning)
+            # Use pub/sub for all messages
+            try:
+                # Try sync version first
                 self.publish_client.publish(topic, message.to_json())
-            print(f"Redis: Sending {topic} (channel: {self.config.channel})")
+            except:
+                # Try async version
+                await self.publish_client.publish(topic, message.to_json())
             
             return True
             
@@ -167,7 +169,6 @@ class RedisProtocol(ProtocolInterface):
                 data = message['data']
                 
                 if data:
-                    print(f"Redis: Received {channel} (channel: {self.config.channel})")
                     messages.append({
                         'topic': channel,
                         'payload': data

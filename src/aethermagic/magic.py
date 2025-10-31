@@ -16,7 +16,7 @@ from .protocols import (
 )
 
 # Import protocol implementations
-from .protocols.redis_protocol import RedisProtocol, RedisStreamProtocol
+from .protocols.redis_protocol import RedisProtocol
 from .protocols.websocket_protocol import WebSocketProtocol
 from .protocols.zeromq_protocol import ZeroMQProtocol
 from .protocols.mqtt_protocol import MQTTProtocol
@@ -33,13 +33,7 @@ class ProtocolFactory:
             return MQTTProtocol(config)
             
         elif config.protocol_type == ProtocolType.REDIS:
-            use_streams = config.extra_params.get('use_streams', False)
-            if use_streams:
-                consumer_group = config.extra_params.get('consumer_group', 'workers')
-                consumer_name = config.extra_params.get('consumer_name', None)
-                return RedisStreamProtocol(config, consumer_group, consumer_name)
-            else:
-                return RedisProtocol(config)
+            return RedisProtocol(config)
                 
         elif config.protocol_type == ProtocolType.HTTP:
             mode = config.extra_params.get('mode', 'client')
@@ -140,6 +134,9 @@ class MultiProtocolAetherMagic:
         self.__temp_unsubscribed_shared = []  # Track temporarily unsubscribed shared topics
         self.__processed_tasks = set()  # Track processed task IDs to prevent duplicates
         
+        # Debug: Log AetherMagic creation
+        print(f"🔥 AetherMagic created: {self.config.protocol_type.value} (channel: '{self.config.channel}')")
+        
         # Share instance with thread and optional channel
         self.__share_instance(self)
     
@@ -202,7 +199,7 @@ class MultiProtocolAetherMagic:
                 if not success:
                     raise Exception("Failed to connect")
                 
-                print(f"{self.config.protocol_type.value.upper()}: Connected")
+                print(f"{self.config.protocol_type.value.upper()}: Connected (channel: {self.config.channel})")
                 self.__connected = True
                 
                 while self.__connected and not self.__should_stop:
@@ -236,18 +233,18 @@ class MultiProtocolAetherMagic:
                     await asyncio.sleep(0.1)
                     
             except Exception as e:
-                print(f"{self.config.protocol_type.value.upper()}: Connection lost - {e}")
+                print(f"{self.config.protocol_type.value.upper()}: Connection lost - {e} (channel: {self.config.channel})")
                 self.__connected = False
                 await asyncio.sleep(failed_connection_interval)
         
         # Clean shutdown
         if self.__connected:
             await self.protocol.disconnect()
-            print(f"{self.config.protocol_type.value.upper()}: Disconnected")
+            print(f"{self.config.protocol_type.value.upper()}: Disconnected (channel: {self.config.channel})")
     
     async def stop(self):
         """Stop the main loop gracefully"""
-        print(f"{self.config.protocol_type.value.upper()}: Stopping...")
+        print(f"{self.config.protocol_type.value.upper()}: Stopping... (channel: {self.config.channel})")
         self.__should_stop = True
         self.__connected = False
     
@@ -264,7 +261,7 @@ class MultiProtocolAetherMagic:
                 topic = self.__topic_for_listener(listener)
                 
                 if not any(topic == s for s in self.__subscribed):
-                    print(f"{self.config.protocol_type.value.upper()}: Subscribed to {topic}")
+                    print(f"{self.config.protocol_type.value.upper()}: Subscribed to {topic} (channel: {self.config.channel})")
                     await self.protocol.subscribe(topic)
                     self.__subscribed.append(topic)
                 
@@ -287,7 +284,7 @@ class MultiProtocolAetherMagic:
                         found = True
                 
                 if not found and topic in self.__subscribed:
-                    print(f"{self.config.protocol_type.value.upper()}: Unsubscribed from {topic}")
+                    print(f"{self.config.protocol_type.value.upper()}: Unsubscribed from {topic} (channel: {self.config.channel})")
                     await self.protocol.unsubscribe(topic)
                     self.__subscribed.remove(topic)
     
@@ -332,7 +329,7 @@ class MultiProtocolAetherMagic:
                 
                 if topic and payload:
                     
-                    print(f"{self.config.protocol_type.value.upper()}: Received {topic}")
+                    print(f"{self.config.protocol_type.value.upper()}: Received {topic} (channel: {self.config.channel})")
                     
                     incoming = {'topic': topic, 'payload': payload}
                     self.__incoming.append(incoming)
@@ -355,7 +352,7 @@ class MultiProtocolAetherMagic:
                 payload_data = json.loads(payload_str)
                 message = AetherMessage.from_dict(payload_data)
                 
-                print(f"{self.config.protocol_type.value.upper()}: Sending {topic}")
+                print(f"{self.config.protocol_type.value.upper()}: Sending {topic} (channel: {self.config.channel})")
                 await self.protocol.publish(topic, message, retain)
                 
             except Exception as e:
@@ -371,7 +368,7 @@ class MultiProtocolAetherMagic:
         # IMPORTANT: Also update the listener's TID to wildcard for perform actions
         # This ensures proper matching in __for_message_fits_listener
         if listener['action'] == 'perform' and listener['tid'] not in ['+', '']:
-            print(f"MQTT: Converting listener TID from {listener['tid']} to + for perform action")
+            print(f"{self.config.protocol_type.value.upper()}: Converting listener TID from {listener['tid']} to + for perform action (channel: {self.config.channel})")
             listener['tid'] = '+'
         
         # Use shared subscriptions for perform actions (task distribution)
@@ -383,8 +380,7 @@ class MultiProtocolAetherMagic:
             listener['context'],
             tid_for_subscription,  # Use '+' for perform subscriptions
             listener['action'],
-            shared=use_shared,  # Enable shared subscriptions for task distribution
-            workgroup=listener['workgroup']
+            shared=use_shared  # Enable shared subscriptions for task distribution
         )
     
     def __data_to_fulldata(self, action, status, progress, data):
@@ -508,14 +504,17 @@ class MultiProtocolAetherMagic:
     
     async def __send_immediate(self, job, workgroup, task, context, action, tid, payload, retain=False):
         """Send message immediately"""
+        print(f"🔥 DEBUG: __send_immediate called - connected={self.__connected}")
         if self.__connected:
             try:
                 topic = self.protocol.generate_topic(job, task, context, tid, action)
+                print(f"🔥 DEBUG: Generated topic={topic}")
                 
                 # Parse payload to create AetherMessage
                 payload_data = json.loads(payload)
                 message = AetherMessage.from_dict(payload_data)
                 
+                print(f"🔥 DEBUG: Calling protocol.publish")
                 await self.protocol.publish(topic, message, retain)
                 await asyncio.sleep(0.001)  # Brief yield
                 

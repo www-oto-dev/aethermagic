@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "aethermagic"
-version = "0.1.31"
+version = "0.2.4"
 authors = [
   { name="Michael Galizki", email="michael@galizki.com" },
 ]
-description = "AetherMagic - Multi-protocol communications between microservices (MQTT, Redis, HTTP/WebSocket, ZeroMQ)"
+description = "AetherMagic - Multi-protocol communications library with channel support (MQTT, Redis, WebSocket, ZeroMQ, RabbitMQ)"
 readme = "README.md"
 requires-python = ">=3.8"
 classifiers = [
@@ -16,11 +16,46 @@ classifiers = [
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
 ]
-dynamic = ["dependencies"]
+dependencies = [
+    # Core dependencies (always required)
+    "asyncio",
+    "asgiref>=3.8.1",
+    "certifi",
+]
+
+# Optional dependencies for different protocols
+[project.optional-dependencies]
+mqtt = [
+    "aiomqtt>=2.0.0",
+    "paho-mqtt>=1.6.0",
+]
+redis = [
+    "redis[hiredis]>=4.0.0",
+]
+websocket = [
+    "aiohttp>=3.8.0",
+    "websockets>=10.0",
+]
+zeromq = [
+    "pyzmq>=24.0.0",
+]
+rabbitmq = [
+    "aio-pika>=8.0.0",
+]
+# Install all protocols
+all = [
+    "aiomqtt>=2.0.0",
+    "paho-mqtt>=2.1.0",
+    "redis[hiredis]>=4.0.0",
+    "aiohttp>=3.8.0", 
+    "websockets>=10.0",
+    "pyzmq>=24.0.0",
+    "aio-pika>=8.0.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/www-oto-dev/aether-magic"
 Issues = "https://github.com/www-oto-dev/aether/issues"
 
-[tool.setuptools.dynamic]
-dependencies = {file = ["requirements.txt"]}
+[tool.hatch.metadata]
+allow-direct-references = true

@@ -30,11 +30,32 @@ AetherMagic is a powerful multi-protocol communication library for microservices
 
 ## Installation
 
+### Basic Installation
 ```bash
 pip install aethermagic
+```
 
-# For all protocols install additional dependencies:
-pip install redis aiohttp websockets pyzmq
+### Protocol-Specific Installation
+Install only the protocols you need:
+
+```bash
+# For MQTT support
+pip install aethermagic[mqtt]
+
+# For Redis support  
+pip install aethermagic[redis]
+
+# For WebSocket support
+pip install aethermagic[websocket]
+
+# For ZeroMQ support
+pip install aethermagic[zeromq]
+
+# For RabbitMQ support
+pip install aethermagic[rabbitmq]
+
+# Install all protocols
+pip install aethermagic[all]
 ```
 
 ## Usage
@@ -367,6 +388,70 @@ await worker.perform_task(
 
 - **Redis**: Atomic LPUSH/BRPOP operations ensure single delivery
 - **MQTT**: Broker's shared subscription handles distribution  
+
+## Multi-Protocol Setup (Channel Support)
+
+AetherMagic supports running multiple protocols simultaneously using channel isolation:
+
+```python
+import asyncio
+from aethermagic import AetherMagic, AetherTask
+
+async def multi_protocol_service():
+    # MQTT for general messaging
+    mqtt_service = AetherMagic(
+        protocol_type='mqtt',
+        host='mqtt.example.com',
+        port=8883,
+        ssl=True,
+        union='production',
+        channel='messaging'  # 🔥 Channel identifier
+    )
+    
+    # Redis for caching and AI tasks
+    redis_service = AetherMagic(
+        protocol_type='redis', 
+        host='redis.example.com',
+        port=6379,
+        ssl=True,
+        union='production',
+        channel='caching'  # 🔥 Different channel
+    )
+    
+    # Start both services
+    mqtt_task = asyncio.create_task(mqtt_service.main())
+    redis_task = asyncio.create_task(redis_service.main())
+    
+    # Create tasks for different channels
+    mqtt_task = AetherTask(
+        job='notifications',
+        task='send_email',
+        channel='messaging'  # Uses MQTT
+    )
+    
+    redis_task = AetherTask(
+        job='ai',
+        task='generate_image', 
+        channel='caching'  # Uses Redis
+    )
+    
+    # Execute tasks
+    await mqtt_task.perform({'email': 'user@example.com'})
+    await redis_task.perform({'prompt': 'sunset landscape'})
+
+# Run the service
+asyncio.run(multi_protocol_service())
+```
+
+## Dependencies
+
+AetherMagic automatically installs protocol-specific dependencies when you install the optional packages:
+
+- **MQTT**: `asyncio-mqtt`, `paho-mqtt`, `aiomqtt`
+- **Redis**: `redis[hiredis]` (includes high-performance hiredis parser)
+- **WebSocket**: `aiohttp`, `websockets`
+- **ZeroMQ**: `pyzmq`
+- **RabbitMQ**: `aio-pika`
 - **ZeroMQ**: PUSH/PULL pattern is inherently load-balanced
 - **WebSocket**: Random selection with connection tracking
 

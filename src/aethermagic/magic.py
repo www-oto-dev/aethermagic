@@ -15,13 +15,6 @@ from .protocols import (
     SUBSTATE
 )
 
-# Import protocol implementations
-from .protocols.redis_protocol import RedisProtocol
-from .protocols.websocket_protocol import WebSocketProtocol
-from .protocols.zeromq_protocol import ZeroMQProtocol
-from .protocols.mqtt_protocol import MQTTProtocol
-
-
 class ProtocolFactory:
     """Factory for creating protocol instances"""
     
@@ -30,22 +23,42 @@ class ProtocolFactory:
         """Create appropriate protocol instance based on config"""
         
         if config.protocol_type == ProtocolType.MQTT:
-            return MQTTProtocol(config)
+            try:
+                from .protocols.mqtt_protocol import MQTTProtocol
+                return MQTTProtocol(config)
+            except ImportError as e:
+                raise ImportError(f"MQTT dependencies not found. Install with: pip install aethermagic[mqtt]. Error: {e}")
             
         elif config.protocol_type == ProtocolType.REDIS:
-            return RedisProtocol(config)
+            try:
+                from .protocols.redis_protocol import RedisProtocol
+                return RedisProtocol(config)
+            except ImportError as e:
+                raise ImportError(f"Redis dependencies not found. Install with: pip install aethermagic[redis]. Error: {e}")
                 
         elif config.protocol_type == ProtocolType.HTTP:
-            mode = config.extra_params.get('mode', 'client')
-            return WebSocketProtocol(config, mode)
+            try:
+                from .protocols.websocket_protocol import WebSocketProtocol
+                mode = config.extra_params.get('mode', 'client')
+                return WebSocketProtocol(config, mode)
+            except ImportError as e:
+                raise ImportError(f"WebSocket dependencies not found. Install with: pip install aethermagic[websocket]. Error: {e}")
             
         elif config.protocol_type == ProtocolType.WEBSOCKET:
-            mode = config.extra_params.get('mode', 'client')  
-            return WebSocketProtocol(config, mode)
+            try:
+                from .protocols.websocket_protocol import WebSocketProtocol
+                mode = config.extra_params.get('mode', 'client')  
+                return WebSocketProtocol(config, mode)
+            except ImportError as e:
+                raise ImportError(f"WebSocket dependencies not found. Install with: pip install aethermagic[websocket]. Error: {e}")
             
         elif config.protocol_type == ProtocolType.ZEROMQ:
-            pattern = config.extra_params.get('pattern', 'pubsub')
-            return ZeroMQProtocol(config, pattern)
+            try:
+                from .protocols.zeromq_protocol import ZeroMQProtocol
+                pattern = config.extra_params.get('pattern', 'pubsub')
+                return ZeroMQProtocol(config, pattern)
+            except ImportError as e:
+                raise ImportError(f"ZeroMQ dependencies not found. Install with: pip install aethermagic[zeromq]. Error: {e}")
             
         else:
             raise ValueError(f"Unsupported protocol: {config.protocol_type}")
@@ -504,17 +517,14 @@ class MultiProtocolAetherMagic:
     
     async def __send_immediate(self, job, workgroup, task, context, action, tid, payload, retain=False):
         """Send message immediately"""
-        print(f"🔥 DEBUG: __send_immediate called - connected={self.__connected}")
         if self.__connected:
             try:
                 topic = self.protocol.generate_topic(job, task, context, tid, action)
-                print(f"🔥 DEBUG: Generated topic={topic}")
                 
                 # Parse payload to create AetherMessage
                 payload_data = json.loads(payload)
                 message = AetherMessage.from_dict(payload_data)
                 
-                print(f"🔥 DEBUG: Calling protocol.publish")
                 await self.protocol.publish(topic, message, retain)
                 await asyncio.sleep(0.001)  # Brief yield
                 

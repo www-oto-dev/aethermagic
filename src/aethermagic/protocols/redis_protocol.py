@@ -50,19 +50,19 @@ class RedisProtocol(ProtocolInterface):
             # Add extra parameters
             connection_params.update(self.config.extra_params)
             
-            # Create separate clients for publishing and subscribing
-            self.publish_client = redis.Redis(**connection_params)
-            self.subscribe_client = redis.Redis(**connection_params)
+            # Create single client for both publishing and subscribing
+            self.client = redis.Redis(**connection_params)
+            self.publish_client = self.client  # Alias for backward compatibility
+            self.subscribe_client = self.client  # Alias for backward compatibility
             
-            # Test connections (sync ping - ignore RuntimeWarning for now)
+            # Test connection (sync ping - ignore RuntimeWarning for now)
             import warnings
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
-                self.publish_client.ping()
-                self.subscribe_client.ping()
+                self.client.ping()
             
             # Create pub/sub connection
-            self.pubsub = self.subscribe_client.pubsub()
+            self.pubsub = self.client.pubsub()
             
             self.connected = True
             print(f"Redis: Connected (channel: {self.config.channel})")
@@ -78,10 +78,8 @@ class RedisProtocol(ProtocolInterface):
         try:
             if self.pubsub:
                 await self.pubsub.close()
-            if self.subscribe_client:
-                await self.subscribe_client.close()
-            if self.publish_client:
-                await self.publish_client.close()
+            if self.client:
+                await self.client.close()
             self.connected = False
             return True
         except Exception as e:
@@ -98,7 +96,7 @@ class RedisProtocol(ProtocolInterface):
             import warnings
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
-                self.publish_client.publish(topic, message.to_json())
+                self.client.publish(topic, message.to_json())
             print(f"Redis: Sending {topic} (channel: {self.config.channel})")
             
             return True
@@ -112,14 +110,20 @@ class RedisProtocol(ProtocolInterface):
         try:
             if not self.pubsub or not self.connected:
                 return False
+            
+            # Convert MQTT wildcards to Redis wildcards
+            redis_topic = topic.replace('+', '*')  # MQTT single-level -> Redis wildcard
+            redis_topic = redis_topic.replace('#', '*')  # MQTT multi-level -> Redis wildcard
                 
-            # Handle wildcard patterns
-            if '*' in topic or '?' in topic or '[' in topic:
-                await self.pubsub.psubscribe(topic)
+            # Handle wildcard patterns (Redis uses * for wildcards)
+            if '*' in redis_topic or '?' in redis_topic or '[' in redis_topic:
+                await self.pubsub.psubscribe(redis_topic)
+                print(f"Redis: Pattern subscribed to {redis_topic} (original: {topic}) (channel: {self.config.channel})")
             else:
-                await self.pubsub.subscribe(topic)
+                await self.pubsub.subscribe(redis_topic)
+                print(f"Redis: Subscribed to {redis_topic} (channel: {self.config.channel})")
                 
-            self.subscribed_channels.add(topic)
+            self.subscribed_channels.add(redis_topic)
             return True
             
         except Exception as e:
@@ -131,13 +135,17 @@ class RedisProtocol(ProtocolInterface):
         try:
             if not self.pubsub or not self.connected:
                 return False
+            
+            # Convert MQTT wildcards to Redis wildcards
+            redis_topic = topic.replace('+', '*')  # MQTT single-level -> Redis wildcard
+            redis_topic = redis_topic.replace('#', '*')  # MQTT multi-level -> Redis wildcard
                 
-            if '*' in topic or '?' in topic or '[' in topic:
-                await self.pubsub.punsubscribe(topic)
+            if '*' in redis_topic or '?' in redis_topic or '[' in redis_topic:
+                await self.pubsub.punsubscribe(redis_topic)
             else:
-                await self.pubsub.unsubscribe(topic)
+                await self.pubsub.unsubscribe(redis_topic)
                 
-            self.subscribed_channels.discard(topic)
+            self.subscribed_channels.discard(redis_topic)
             return True
             
         except Exception as e:

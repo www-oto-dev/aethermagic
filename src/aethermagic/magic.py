@@ -162,9 +162,10 @@ class MultiProtocolAetherMagic:
             # Store under composite key
             shared_instances[(threadid, channel)] = instance
             
-            # Always store under raw thread id for backward compatibility
-            # This allows AetherTask without channel to work even if AetherMagic has a channel
-            shared_instances[threadid] = instance
+            # Store under raw thread id only if no default instance exists yet
+            # First created instance becomes the default for AetherTask without channel
+            if threadid not in shared_instances:
+                shared_instances[threadid] = instance
     
     @staticmethod
     def shared(channel: str = ''):
